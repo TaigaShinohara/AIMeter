@@ -1606,41 +1606,41 @@ struct PeriodLimitRowView: View {
         let ratio = metric.remainingRatio
         let pct = metric.remainingPercent
 
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             // 1. Period Label
             Text(metric.period.label)
-                .font(.system(size: 13, weight: isHighlighted ? .bold : .medium))
+                .font(.system(size: 11.5, weight: isHighlighted ? .bold : .medium))
                 .foregroundStyle(isHighlighted ? .primary : .secondary)
-                .frame(width: 44, alignment: .leading)
+                .frame(width: 36, alignment: .leading)
 
             // 2. Clean Progress Bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(Color.primary.opacity(0.08))
-                        .frame(height: 6)
+                        .frame(height: 5)
                     Capsule()
                         .fill(gaugeColor(for: ratio))
-                        .frame(width: max(3, geo.size.width * ratio), height: 6)
+                        .frame(width: max(3, geo.size.width * ratio), height: 5)
                         .animation(.easeInOut(duration: 0.2), value: ratio)
                 }
                 .frame(maxHeight: .infinity, alignment: .center)
             }
-            .frame(height: 16)
+            .frame(height: 12)
 
             // 3. Remaining Amount (or Reset Time hint)
             Text("残 \(formatCompactTokenCount(metric.remainingTokens))")
-                .font(.system(size: 12.5).monospacedDigit())
+                .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(.secondary)
-                .frame(width: 72, alignment: .trailing)
+                .frame(width: 62, alignment: .trailing)
 
             // 4. Remaining Percentage
             Text("\(pct)%")
-                .font(.system(size: 13.5, weight: .bold).monospacedDigit())
+                .font(.system(size: 12, weight: .bold).monospacedDigit())
                 .foregroundStyle(percentageTextColor(for: ratio))
-                .frame(width: 44, alignment: .trailing)
+                .frame(width: 36, alignment: .trailing)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 1.5)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(metric.period.label)制限")
         .accessibilityValue("残り \(formatCompactTokenCount(metric.remainingTokens)) (\(pct)パーセント)")
@@ -1677,48 +1677,48 @@ struct ProviderUsageSection: View {
         if displayedMetrics.isEmpty {
             EmptyView()
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-            // Section Header
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 6) {
+                // Section Header
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(.primary)
 
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
+                    if !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    Spacer()
+
+                    if let resetInfo = activeResetString {
+                        Text(resetInfo)
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else if usedCostUSD > 0 || budgetUSD > 0 {
+                        Text(String(format: "$%.2f", usedCostUSD))
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
-                Spacer()
-
-                if let resetInfo = activeResetString {
-                    Text(resetInfo)
-                        .font(.system(size: 12).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                } else if usedCostUSD > 0 || budgetUSD > 0 {
-                    Text(String(format: "$%.2f", usedCostUSD))
-                        .font(.system(size: 12).monospacedDigit())
-                        .foregroundStyle(.secondary)
+                // Period Rows
+                VStack(spacing: 2) {
+                    ForEach(displayedMetrics) { metric in
+                        PeriodLimitRowView(
+                            metric: metric,
+                            isHighlighted: highlightedPeriod == metric.period && selectedFilter == nil
+                        )
+                    }
                 }
             }
-
-            // Period Rows
-            VStack(spacing: 4) {
-                ForEach(displayedMetrics) { metric in
-                    PeriodLimitRowView(
-                        metric: metric,
-                        isHighlighted: highlightedPeriod == metric.period && selectedFilter == nil
-                    )
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
-        )
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
         }
     }
 }
@@ -2253,7 +2253,7 @@ struct AIMeterCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             if showHelp {
                 HelpView {
                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -2298,9 +2298,9 @@ struct AIMeterCardView: View {
                 )
             } else {
                 // Header
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Text("AIMeter")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 13.5, weight: .bold))
                         .foregroundStyle(.primary)
 
                     Spacer()
@@ -2311,11 +2311,11 @@ struct AIMeterCardView: View {
                         }
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .frame(width: 28, height: 26)
+                            .frame(width: 24, height: 22)
                             .background(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
                                     .fill(Color.primary.opacity(0.06))
                             )
                             .contentShape(Rectangle())
@@ -2330,11 +2330,11 @@ struct AIMeterCardView: View {
                         }
                     } label: {
                         Image(systemName: "questionmark.circle")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .frame(width: 28, height: 26)
+                            .frame(width: 24, height: 22)
                             .background(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
                                     .fill(Color.primary.opacity(0.06))
                             )
                             .contentShape(Rectangle())
@@ -2349,16 +2349,16 @@ struct AIMeterCardView: View {
                             showSettings = true
                         }
                     } label: {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 3) {
                             Image(systemName: "slider.horizontal.3")
                             Text("設定")
                         }
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 9)
-                        .frame(height: 26)
+                        .padding(.horizontal, 7)
+                        .frame(height: 22)
                         .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(Color.primary.opacity(0.06))
                         )
                         .contentShape(Rectangle())
@@ -2377,25 +2377,25 @@ struct AIMeterCardView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .controlSize(.regular)
+                .controlSize(.small)
 
                 // Provider Sections
                 if totalVisibleProvidersCount == 0 {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 6) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 22))
+                            .font(.system(size: 18))
                             .foregroundStyle(.tertiary)
                         Text("\(selectedPeriodFilter?.label ?? "")枠が設定されているサービスはありません")
-                            .font(.system(size: 12))
+                            .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 28)
+                    .padding(.vertical, 20)
                 } else if totalVisibleProvidersCount > 2 {
                     ScrollView {
                         providerSectionsStack
                     }
-                    .frame(maxHeight: 400)
+                    .frame(maxHeight: 340)
                 } else {
                     providerSectionsStack
                 }
@@ -2403,14 +2403,14 @@ struct AIMeterCardView: View {
                 // Quiet Footer
                 HStack {
                     Text("\(Self.timeFormatter.string(from: monitor.lastUpdated)) 更新")
-                        .font(.system(size: 12).monospacedDigit())
+                        .font(.system(size: 10.5).monospacedDigit())
                         .foregroundStyle(.tertiary)
                     Spacer()
                     Text(String(format: "月間計 $%.2f", monitor.totalCostUSD))
-                        .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+                        .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                .padding(.top, 2)
+                .padding(.top, 1)
 
                 if isMenuBar {
                     Divider()
@@ -2418,20 +2418,20 @@ struct AIMeterCardView: View {
                         Button("ウィジェットを表示") {
                             openWindow(id: "desktop-widget")
                         }
-                        .controlSize(.regular)
+                        .controlSize(.small)
 
                         Spacer()
 
                         Button("終了") {
                             NSApplication.shared.terminate(nil)
                         }
-                        .controlSize(.regular)
+                        .controlSize(.small)
                     }
                 }
             }
         }
-        .padding(16)
-        .frame(width: showHelp ? 480 : ((isDisplayingWizard && !showHelp) ? 550 : (showSettings ? 420 : 360)))
+        .padding(12)
+        .frame(width: showHelp ? 480 : ((isDisplayingWizard && !showHelp) ? 550 : (showSettings ? 420 : 310)))
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.regularMaterial)
@@ -2451,7 +2451,7 @@ struct AIMeterCardView: View {
 
     @ViewBuilder
     private var providerSectionsStack: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             if isShowOpenAI {
                 ProviderUsageSection(
                     title: "OpenAI",
