@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WORKSPACE_DIR="/Volumes/SSD-1TB/Projects/Apps/AIMeter"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${WORKSPACE_DIR}"
 
-echo "[AIMeter] Building release binary..."
+echo "[AIMeter] Building release binary in ${WORKSPACE_DIR}..."
 swift build -c release
 
 APP_DIR="${WORKSPACE_DIR}/AIMeter.app"
@@ -42,4 +43,7 @@ cat > "${CONTENTS_DIR}/Info.plist" << 'EOF'
 </plist>
 EOF
 
-echo "[AIMeter] Successfully built ${APP_DIR}"
+echo "[AIMeter] Signing app bundle (ad-hoc with bound Info.plist)..."
+codesign --force --deep --sign - "${APP_DIR}"
+
+echo "[AIMeter] Successfully built and signed ${APP_DIR}"

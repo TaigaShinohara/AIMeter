@@ -13,6 +13,11 @@ let package = Package(
         .executableTarget(
             name: "AIMeter",
             path: "Sources/AIMeter"
+        ),
+        .testTarget(
+            name: "AIMeterTests",
+            dependencies: ["AIMeter"],
+            path: "Tests/AIMeterTests"
         )
     ]
 )
