@@ -11,10 +11,14 @@ swift build -c release
 APP_DIR="${WORKSPACE_DIR}/AIMeter.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
+RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
-mkdir -p "${MACOS_DIR}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp ".build/release/AIMeter" "${MACOS_DIR}/AIMeter"
 chmod +x "${MACOS_DIR}/AIMeter"
+
+cp "${WORKSPACE_DIR}/scripts/update_usage.py" "${RESOURCES_DIR}/update_usage.py"
+chmod +x "${RESOURCES_DIR}/update_usage.py"
 
 cat > "${CONTENTS_DIR}/Info.plist" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -30,9 +34,9 @@ cat > "${CONTENTS_DIR}/Info.plist" << 'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.1.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
@@ -43,7 +47,7 @@ cat > "${CONTENTS_DIR}/Info.plist" << 'EOF'
 </plist>
 EOF
 
-echo "[AIMeter] Signing app bundle (ad-hoc with bound Info.plist)..."
+echo "[AIMeter] Signing app bundle (ad-hoc with bound Info.plist and bundled collector)..."
 codesign --force --deep --sign - "${APP_DIR}"
 
 echo "[AIMeter] Successfully built and signed ${APP_DIR}"

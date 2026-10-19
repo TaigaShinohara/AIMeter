@@ -3,12 +3,111 @@ import AppKit
 import Foundation
 import Security
 
+// MARK: - Limit Period Type
+enum LimitPeriod: String, CaseIterable, Codable, Identifiable {
+    case fiveHours = "5h"
+    case daily = "1d"
+    case weekly = "7d"
+    case monthly = "30d"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .fiveHours: return "5時間"
+        case .daily: return "1日"
+        case .weekly: return "週次"
+        case .monthly: return "月次"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .fiveHours: return "5h"
+        case .daily: return "1d"
+        case .weekly: return "1w"
+        case .monthly: return "1m"
+        }
+    }
+}
+
+// MARK: - Per-Period Usage & Limit Snapshot
+struct PeriodUsageMetric: Equatable, Identifiable {
+    let period: LimitPeriod
+    var usedTokens: Int
+    var limitTokens: Int
+    var serverUsedPercent: Double? = nil
+    var resetTimestamp: Int? = nil
+
+    var id: String { period.rawValue }
+
+    var effectiveLimitTokens: Int {
+        if let pct = serverUsedPercent, pct > 0.5, usedTokens > 0 {
+            return max(usedTokens, Int((Double(usedTokens) / (pct / 100.0)).rounded()))
+        }
+        return limitTokens
+    }
+
+    var remainingTokens: Int {
+        max(0, effectiveLimitTokens - usedTokens)
+    }
+
+    var remainingRatio: Double {
+        if let pct = serverUsedPercent {
+            return min(1.0, max(0.0, (100.0 - pct) / 100.0))
+        }
+        guard effectiveLimitTokens > 0 else { return 0 }
+        return min(1.0, max(0.0, Double(remainingTokens) / Double(effectiveLimitTokens)))
+    }
+
+    var remainingPercent: Int {
+        Int((remainingRatio * 100).rounded())
+    }
+}
+
 // MARK: - Local JSON Model
+struct ProviderPeriodUsageJSON: Codable, Equatable {
+    var fiveHours: Int?
+    var daily: Int?
+    var weekly: Int?
+    var monthly: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case fiveHours = "5h"
+        case daily = "1d"
+        case weekly = "7d"
+        case monthly = "30d"
+    }
+}
+
+struct ProviderPeriodPercentJSON: Codable, Equatable {
+    var fiveHours: Double?
+    var daily: Double?
+    var weekly: Double?
+    var monthly: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case fiveHours = "5h"
+        case daily = "1d"
+        case weekly = "7d"
+        case monthly = "30d"
+    }
+}
+
 struct LocalUsageData: Codable, Equatable {
     var openaiUsedTokens: Int?
     var openaiCostUSD: Double?
     var geminiUsedTokens: Int?
     var geminiCostUSD: Double?
+
+    var openaiUsedByPeriod: ProviderPeriodUsageJSON?
+    var geminiUsedByPeriod: ProviderPeriodUsageJSON?
+
+    var openaiServerUsedPercentByPeriod: ProviderPeriodPercentJSON?
+    var openaiResetAtByPeriod: ProviderPeriodUsageJSON?
+    var openaiPlanType: String?
+    var openaiCreditBalance: Double?
+    var source: String?
     var updatedAt: String?
 }
 
@@ -59,25 +158,59 @@ enum UsageParser {
         return Int(startOfMonth.timeIntervalSince1970)
     }
 
-    static func parseOpenAIUsagePage(data: Data) throws -> (tokens: Int, nextPage: String?) {
+    static func startTimestamp(for period: LimitPeriod, now: Date = Date()) -> Int {
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        switch period {
+        case .fiveHours:
+            return Int(now.addingTimeInterval(-5 * 3600).timeIntervalSince1970)
+        case .daily:
+            let startOfDay = utcCalendar.startOfDay(for: now)
+            return Int(startOfDay.timeIntervalSince1970)
+        case .weekly:
+            let sevenDaysAgo = utcCalendar.date(byAdding: .day, value: -6, to: utcCalendar.startOfDay(for: now)) ?? now.addingTimeInterval(-7 * 86400)
+            return Int(sevenDaysAgo.timeIntervalSince1970)
+        case .monthly:
+            return startOfMonthUnixTimestamp(for: now)
+        }
+    }
+
+    struct BucketTokenRecord: Equatable {
+        let startTime: Int
+        let endTime: Int
+        let tokens: Int
+    }
+
+    static func parseOpenAIUsagePageWithBuckets(data: Data) throws -> (buckets: [BucketTokenRecord], totalTokens: Int, nextPage: String?) {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw URLError(.cannotParseResponse)
         }
         var totalTokens = 0
+        var records: [BucketTokenRecord] = []
         if let buckets = json["data"] as? [[String: Any]] {
             for bucket in buckets {
+                let bStart = parseIntValue(bucket["start_time"])
+                let bEnd = parseIntValue(bucket["end_time"])
+                var bucketTokens = 0
                 if let results = bucket["results"] as? [[String: Any]] {
                     for res in results {
                         let input = parseIntValue(res["input_tokens"])
                         let output = parseIntValue(res["output_tokens"])
-                        totalTokens += (input + output)
+                        bucketTokens += (input + output)
                     }
                 }
+                totalTokens += bucketTokens
+                records.append(BucketTokenRecord(startTime: bStart, endTime: bEnd, tokens: bucketTokens))
             }
         }
         let hasMore = (json["has_more"] as? Bool) ?? true
         let nextPage = hasMore ? (json["next_page"] as? String) : nil
-        return (totalTokens, (nextPage?.isEmpty == false) ? nextPage : nil)
+        return (records, totalTokens, (nextPage?.isEmpty == false) ? nextPage : nil)
+    }
+
+    static func parseOpenAIUsagePage(data: Data) throws -> (tokens: Int, nextPage: String?) {
+        let parsed = try parseOpenAIUsagePageWithBuckets(data: data)
+        return (parsed.totalTokens, parsed.nextPage)
     }
 
     static func parseOpenAICostsPage(data: Data) throws -> (costUSD: Double, nextPage: String?) {
@@ -151,25 +284,49 @@ enum UsageParser {
 // MARK: - Usage Monitor
 @MainActor
 final class UsageMonitor: ObservableObject {
+    @AppStorage("didCalibrateRealLimitsV1") var didCalibrateRealLimitsV1: Bool = false
     @AppStorage("openaiAdminKey") var legacyOpenaiAdminKey: String = ""
     @Published var openaiAdminKey: String = "" {
         didSet {
             KeychainHelper.save(key: "openaiAdminKey", value: openaiAdminKey)
         }
     }
-    @AppStorage("openaiTokenLimit") var openaiTokenLimit: Int = 5_000_000
-    @AppStorage("openaiBudgetUSD") var openaiBudgetUSD: Double = 20.0
+
+    // OpenAI Token Limits per Period (calibrated for real Codex/OpenAI usage)
+    @AppStorage("openaiTokenLimit5h") var openaiTokenLimit5h: Int = 40_000_000
+    @AppStorage("openaiTokenLimitDaily") var openaiTokenLimitDaily: Int = 80_000_000
+    @AppStorage("openaiTokenLimitWeekly") var openaiTokenLimitWeekly: Int = 290_000_000
+    @AppStorage("openaiTokenLimit") var openaiTokenLimit: Int = 800_000_000
+    @AppStorage("openaiBudgetUSD") var openaiBudgetUSD: Double = 600.0
+
+    // Gemini Token Limits per Period (calibrated for real Antigravity/Gemini usage)
     @AppStorage("gcpProjectId") var gcpProjectId: String = ""
-    @AppStorage("geminiTokenLimit") var geminiTokenLimit: Int = 10_000_000
+    @AppStorage("geminiTokenLimit5h") var geminiTokenLimit5h: Int = 1_500_000
+    @AppStorage("geminiTokenLimitDaily") var geminiTokenLimitDaily: Int = 4_000_000
+    @AppStorage("geminiTokenLimitWeekly") var geminiTokenLimitWeekly: Int = 15_000_000
+    @AppStorage("geminiTokenLimit") var geminiTokenLimit: Int = 40_000_000
     @AppStorage("geminiBudgetUSD") var geminiBudgetUSD: Double = 20.0
 
-    @Published var openaiUsedTokens: Int = 0
-    @Published var openaiCostUSD: Double = 0.0
-    @Published var openaiStatus: String = "ローカル参照"
+    // MenuBar Display Period Mode ("min" = bottleneck or LimitPeriod.rawValue)
+    @AppStorage("menuBarPeriodMode") var menuBarPeriodMode: String = "min"
 
-    @Published var geminiUsedTokens: Int = 0
+    // OpenAI Used Tokens per Period
+    @Published var openaiUsed5h: Int = 0
+    @Published var openaiUsedDaily: Int = 0
+    @Published var openaiUsedWeekly: Int = 0
+    @Published var openaiUsedTokens: Int = 0 // Monthly
+    @Published var openaiServerPct: ProviderPeriodPercentJSON? = nil
+    @Published var openaiResetAt: ProviderPeriodUsageJSON? = nil
+    @Published var openaiCostUSD: Double = 0.0
+    @Published var openaiStatus: String = "実ログ集計中"
+
+    // Gemini Used Tokens per Period
+    @Published var geminiUsed5h: Int = 0
+    @Published var geminiUsedDaily: Int = 0
+    @Published var geminiUsedWeekly: Int = 0
+    @Published var geminiUsedTokens: Int = 0 // Monthly
     @Published var geminiCostUSD: Double = 0.0
-    @Published var geminiStatus: String = "ローカル参照"
+    @Published var geminiStatus: String = "実ログ集計中"
 
     @Published var lastUpdated: Date = Date()
     @Published var isRefreshing: Bool = false
@@ -184,7 +341,6 @@ final class UsageMonitor: ObservableObject {
         config.timeoutIntervalForResource = 30.0
         self.urlSession = URLSession(configuration: config)
 
-        // Migrate plaintext @AppStorage key to Keychain if present
         if let savedKey = KeychainHelper.load(key: "openaiAdminKey"), !savedKey.isEmpty {
             self.openaiAdminKey = savedKey
             if !legacyOpenaiAdminKey.isEmpty {
@@ -195,6 +351,22 @@ final class UsageMonitor: ObservableObject {
             self.openaiAdminKey = migrated
             KeychainHelper.save(key: "openaiAdminKey", value: migrated)
             legacyOpenaiAdminKey = ""
+        }
+
+        // One-time upgrade from initial mock defaults to real-usage scale
+        if !didCalibrateRealLimitsV1 {
+            if openaiTokenLimit == 5_000_000 { openaiTokenLimit = 800_000_000 }
+            if openaiTokenLimitWeekly == 2_000_000 { openaiTokenLimitWeekly = 290_000_000 }
+            if openaiTokenLimitDaily == 500_000 { openaiTokenLimitDaily = 80_000_000 }
+            if openaiTokenLimit5h == 150_000 { openaiTokenLimit5h = 40_000_000 }
+            if openaiBudgetUSD == 20.0 { openaiBudgetUSD = 600.0 }
+
+            if geminiTokenLimit == 10_000_000 { geminiTokenLimit = 40_000_000 }
+            if geminiTokenLimitWeekly == 4_000_000 { geminiTokenLimitWeekly = 15_000_000 }
+            if geminiTokenLimitDaily == 1_000_000 { geminiTokenLimitDaily = 4_000_000 }
+            if geminiTokenLimit5h == 300_000 { geminiTokenLimit5h = 1_500_000 }
+            menuBarPeriodMode = "min"
+            didCalibrateRealLimitsV1 = true
         }
 
         sanitizeSettings()
@@ -225,10 +397,59 @@ final class UsageMonitor: ObservableObject {
     }
 
     func sanitizeSettings() {
+        if openaiTokenLimit5h < 1 { openaiTokenLimit5h = 1 }
+        if openaiTokenLimitDaily < 1 { openaiTokenLimitDaily = 1 }
+        if openaiTokenLimitWeekly < 1 { openaiTokenLimitWeekly = 1 }
         if openaiTokenLimit < 1 { openaiTokenLimit = 1 }
         if openaiBudgetUSD < 0 { openaiBudgetUSD = 0 }
+
+        if geminiTokenLimit5h < 1 { geminiTokenLimit5h = 1 }
+        if geminiTokenLimitDaily < 1 { geminiTokenLimitDaily = 1 }
+        if geminiTokenLimitWeekly < 1 { geminiTokenLimitWeekly = 1 }
         if geminiTokenLimit < 1 { geminiTokenLimit = 1 }
         if geminiBudgetUSD < 0 { geminiBudgetUSD = 0 }
+    }
+
+    var openaiMetrics: [PeriodUsageMetric] {
+        [
+            PeriodUsageMetric(
+                period: .fiveHours,
+                usedTokens: openaiUsed5h,
+                limitTokens: openaiTokenLimit5h,
+                serverUsedPercent: openaiServerPct?.fiveHours,
+                resetTimestamp: openaiResetAt?.fiveHours
+            ),
+            PeriodUsageMetric(
+                period: .daily,
+                usedTokens: openaiUsedDaily,
+                limitTokens: openaiTokenLimitDaily,
+                serverUsedPercent: openaiServerPct?.daily,
+                resetTimestamp: openaiResetAt?.daily
+            ),
+            PeriodUsageMetric(
+                period: .weekly,
+                usedTokens: openaiUsedWeekly,
+                limitTokens: openaiTokenLimitWeekly,
+                serverUsedPercent: openaiServerPct?.weekly,
+                resetTimestamp: openaiResetAt?.weekly
+            ),
+            PeriodUsageMetric(
+                period: .monthly,
+                usedTokens: openaiUsedTokens,
+                limitTokens: openaiTokenLimit,
+                serverUsedPercent: openaiServerPct?.monthly,
+                resetTimestamp: openaiResetAt?.monthly
+            )
+        ]
+    }
+
+    var geminiMetrics: [PeriodUsageMetric] {
+        [
+            PeriodUsageMetric(period: .fiveHours, usedTokens: geminiUsed5h, limitTokens: geminiTokenLimit5h),
+            PeriodUsageMetric(period: .daily, usedTokens: geminiUsedDaily, limitTokens: geminiTokenLimitDaily),
+            PeriodUsageMetric(period: .weekly, usedTokens: geminiUsedWeekly, limitTokens: geminiTokenLimitWeekly),
+            PeriodUsageMetric(period: .monthly, usedTokens: geminiUsedTokens, limitTokens: geminiTokenLimit)
+        ]
     }
 
     var openaiRemainingTokens: Int {
@@ -253,10 +474,29 @@ final class UsageMonitor: ObservableObject {
         openaiCostUSD + geminiCostUSD
     }
 
+    func activeRatio(for metrics: [PeriodUsageMetric]) -> Double {
+        if menuBarPeriodMode == "min" {
+            return metrics.map(\.remainingRatio).min() ?? 0.0
+        }
+        if let period = LimitPeriod(rawValue: menuBarPeriodMode),
+           let matched = metrics.first(where: { $0.period == period }) {
+            return matched.remainingRatio
+        }
+        return metrics.last?.remainingRatio ?? 0.0
+    }
+
     var menuBarTitle: String {
-        let gptPct = Int((openaiRemainingRatio * 100).rounded())
-        let gemPct = Int((geminiRemainingRatio * 100).rounded())
-        return String(format: "GPT:%d%% Gem:%d%%", gptPct, gemPct)
+        let gptPct = Int((activeRatio(for: openaiMetrics) * 100).rounded())
+        let gemPct = Int((activeRatio(for: geminiMetrics) * 100).rounded())
+        let suffix: String
+        if menuBarPeriodMode == "min" {
+            suffix = "min"
+        } else if let period = LimitPeriod(rawValue: menuBarPeriodMode) {
+            suffix = period.shortLabel
+        } else {
+            suffix = "1m"
+        }
+        return String(format: "GPT:%d%% Gem:%d%% (%@)", gptPct, gemPct, suffix)
     }
 
     func refresh() async {
@@ -268,20 +508,49 @@ final class UsageMonitor: ObservableObject {
             isRefreshing = false
         }
 
-        // 1. Reset and load local JSON first
+        // 0. Automatically run local log collector script to update ~/.ai_meter_usage.json from ~/.codex and ~/.gemini
+        await runLocalCollectorScript()
+
+        // 1. Load local JSON
         let localData = loadLocalJSON()
         if let localData {
-            openaiUsedTokens = max(0, localData.openaiUsedTokens ?? 0)
+            let monthlyOpenAI = max(0, localData.openaiUsedByPeriod?.monthly ?? localData.openaiUsedTokens ?? 0)
+            openaiUsedTokens = monthlyOpenAI
+            openaiUsedWeekly = max(0, localData.openaiUsedByPeriod?.weekly ?? min(monthlyOpenAI, Int(Double(monthlyOpenAI) * 0.45)))
+            openaiUsedDaily = max(0, localData.openaiUsedByPeriod?.daily ?? min(openaiUsedWeekly, Int(Double(monthlyOpenAI) * 0.12)))
+            openaiUsed5h = max(0, localData.openaiUsedByPeriod?.fiveHours ?? min(openaiUsedDaily, Int(Double(monthlyOpenAI) * 0.05)))
+            openaiServerPct = localData.openaiServerUsedPercentByPeriod
+            openaiResetAt = localData.openaiResetAtByPeriod
             openaiCostUSD = max(0.0, localData.openaiCostUSD ?? 0.0)
-            geminiUsedTokens = max(0, localData.geminiUsedTokens ?? 0)
+
+            let monthlyGemini = max(0, localData.geminiUsedByPeriod?.monthly ?? localData.geminiUsedTokens ?? 0)
+            geminiUsedTokens = monthlyGemini
+            geminiUsedWeekly = max(0, localData.geminiUsedByPeriod?.weekly ?? min(monthlyGemini, Int(Double(monthlyGemini) * 0.40)))
+            geminiUsedDaily = max(0, localData.geminiUsedByPeriod?.daily ?? min(geminiUsedWeekly, Int(Double(monthlyGemini) * 0.10)))
+            geminiUsed5h = max(0, localData.geminiUsedByPeriod?.fiveHours ?? min(geminiUsedDaily, Int(Double(monthlyGemini) * 0.04)))
             geminiCostUSD = max(0.0, localData.geminiCostUSD ?? 0.0)
-            openaiStatus = "ローカルJSON"
-            geminiStatus = "ローカルJSON"
+
+            if let plan = localData.openaiPlanType, !plan.isEmpty {
+                openaiStatus = "Codex (\(plan)) 実ログ"
+            } else {
+                openaiStatus = "ローカル実ログ"
+            }
+            geminiStatus = "Antigravity/CLI実ログ"
         } else {
+            openaiUsed5h = 0
+            openaiUsedDaily = 0
+            openaiUsedWeekly = 0
             openaiUsedTokens = 0
+            openaiServerPct = nil
+            openaiResetAt = nil
             openaiCostUSD = 0.0
+
+            geminiUsed5h = 0
+            geminiUsedDaily = 0
+            geminiUsedWeekly = 0
             geminiUsedTokens = 0
             geminiCostUSD = 0.0
+
             openaiStatus = "未設定 (JSONなし)"
             geminiStatus = "未設定 (JSONなし)"
         }
@@ -299,6 +568,52 @@ final class UsageMonitor: ObservableObject {
         }
     }
 
+    private func runLocalCollectorScript() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .utility).async {
+                let bundledScript = Bundle.main.path(forResource: "update_usage", ofType: "py")
+                let fallbackScript = "/Volumes/SSD-1TB/Projects/Apps/AIMeter/scripts/update_usage.py"
+                let scriptPath: String?
+                if let b = bundledScript, FileManager.default.fileExists(atPath: b) {
+                    scriptPath = b
+                } else if FileManager.default.fileExists(atPath: fallbackScript) {
+                    scriptPath = fallbackScript
+                } else {
+                    scriptPath = nil
+                }
+
+                guard let resolvedScript = scriptPath else {
+                    continuation.resume()
+                    return
+                }
+
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+                process.arguments = [resolvedScript]
+                process.standardOutput = Pipe()
+                process.standardError = Pipe()
+
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume()
+                    return
+                }
+
+                let timeoutWorkItem = DispatchWorkItem {
+                    if process.isRunning {
+                        process.terminate()
+                    }
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10.0, execute: timeoutWorkItem)
+
+                process.waitUntilExit()
+                timeoutWorkItem.cancel()
+                continuation.resume()
+            }
+        }
+    }
+
     func loadLocalJSON(from customURL: URL? = nil) -> LocalUsageData? {
         let url = customURL ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ai_meter_usage.json")
         guard let data = try? Data(contentsOf: url) else { return nil }
@@ -306,23 +621,59 @@ final class UsageMonitor: ObservableObject {
     }
 
     private func fetchOpenAIUsage(apiKey: String) async {
-        let startTime = UsageParser.startOfMonthUnixTimestamp()
+        let now = Date()
+        let monthStart = UsageParser.startTimestamp(for: .monthly, now: now)
+        let weekStart = UsageParser.startTimestamp(for: .weekly, now: now)
+        let dayStart = UsageParser.startTimestamp(for: .daily, now: now)
+        let fiveHoursStart = UsageParser.startTimestamp(for: .fiveHours, now: now)
+
+        let queryStart = min(monthStart, weekStart)
 
         do {
-            let totalTokens = try await fetchPaginatedOpenAIUsage(apiKey: apiKey, startTime: startTime)
-            self.openaiUsedTokens = totalTokens
+            let dailyBuckets = try await fetchPaginatedOpenAIBuckets(
+                apiKey: apiKey,
+                startTime: queryStart,
+                bucketWidth: "1d",
+                limit: 31
+            )
 
-            if let totalCost = try? await fetchPaginatedOpenAICosts(apiKey: apiKey, startTime: startTime) {
+            var monthTotal = 0
+            var weekTotal = 0
+            var dayTotal = 0
+            for b in dailyBuckets {
+                if b.startTime >= monthStart { monthTotal += b.tokens }
+                if b.startTime >= weekStart { weekTotal += b.tokens }
+                if b.startTime >= dayStart { dayTotal += b.tokens }
+            }
+            self.openaiUsedTokens = monthTotal
+            self.openaiUsedWeekly = weekTotal
+            self.openaiUsedDaily = dayTotal
+
+            if let hourlyBuckets = try? await fetchPaginatedOpenAIBuckets(
+                apiKey: apiKey,
+                startTime: fiveHoursStart,
+                bucketWidth: "1h",
+                limit: 6
+            ) {
+                self.openaiUsed5h = hourlyBuckets.reduce(0) { $0 + $1.tokens }
+            }
+
+            if let totalCost = try? await fetchPaginatedOpenAICosts(apiKey: apiKey, startTime: monthStart) {
                 self.openaiCostUSD = totalCost
             }
             openaiStatus = "OpenAI API連携中"
         } catch {
-            openaiStatus = "API/接続失敗 (ローカル維持)"
+            openaiStatus = "API失敗 (実ログ維持)"
         }
     }
 
-    private func fetchPaginatedOpenAIUsage(apiKey: String, startTime: Int) async throws -> Int {
-        var totalTokens = 0
+    private func fetchPaginatedOpenAIBuckets(
+        apiKey: String,
+        startTime: Int,
+        bucketWidth: String,
+        limit: Int
+    ) async throws -> [UsageParser.BucketTokenRecord] {
+        var allBuckets: [UsageParser.BucketTokenRecord] = []
         var nextPage: String? = nil
         var pageCount = 0
 
@@ -331,8 +682,8 @@ final class UsageMonitor: ObservableObject {
             var components = URLComponents(string: "https://api.openai.com/v1/organization/usage/completions")
             var queryItems = [
                 URLQueryItem(name: "start_time", value: "\(startTime)"),
-                URLQueryItem(name: "bucket_width", value: "1d"),
-                URLQueryItem(name: "limit", value: "31")
+                URLQueryItem(name: "bucket_width", value: bucketWidth),
+                URLQueryItem(name: "limit", value: "\(limit)")
             ]
             if let page = nextPage {
                 queryItems.append(URLQueryItem(name: "page", value: page))
@@ -348,12 +699,12 @@ final class UsageMonitor: ObservableObject {
                 throw URLError(.badServerResponse)
             }
 
-            let parsed = try UsageParser.parseOpenAIUsagePage(data: data)
-            totalTokens += parsed.tokens
+            let parsed = try UsageParser.parseOpenAIUsagePageWithBuckets(data: data)
+            allBuckets.append(contentsOf: parsed.buckets)
             nextPage = parsed.nextPage
         } while nextPage != nil && pageCount < 10
 
-        return totalTokens
+        return allBuckets
     }
 
     private func fetchPaginatedOpenAICosts(apiKey: String, startTime: Int) async throws -> Double {
@@ -393,28 +744,42 @@ final class UsageMonitor: ObservableObject {
 
     private func fetchGeminiUsage(projectId: String) async {
         guard let token = await fetchGcloudAccessToken() else {
-            geminiStatus = "gcloud未認証 (ローカル参照)"
+            geminiStatus = "gcloud未認証 (実ログ参照)"
             return
         }
 
-        let startTime = Date(timeIntervalSince1970: TimeInterval(UsageParser.startOfMonthUnixTimestamp()))
+        let now = Date()
         let isoFormatter = ISO8601DateFormatter()
-        let startStr = isoFormatter.string(from: startTime)
-        let endStr = isoFormatter.string(from: Date())
+        let endStr = isoFormatter.string(from: now)
+        let monthStartStr = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(UsageParser.startTimestamp(for: .monthly, now: now))))
 
-        // 1. Query Vertex AI / Gemini token_count metric first
         let tokenFilter = #"metric.type="aiplatform.googleapis.com/publisher/online_serving/token_count""#
         let requestCountFilter = #"metric.type="serviceruntime.googleapis.com/api/request_count" AND (resource.labels.service="generativelanguage.googleapis.com" OR resource.labels.service="aiplatform.googleapis.com")"#
 
         do {
-            if let tokenCount = try? await queryCloudMonitoring(
+            if let monthTokens = try? await queryCloudMonitoring(
                 projectId: projectId,
                 token: token,
                 filter: tokenFilter,
-                startStr: startStr,
+                startStr: monthStartStr,
                 endStr: endStr
-            ), tokenCount > 0 {
-                self.geminiUsedTokens = tokenCount
+            ), monthTokens > 0 {
+                self.geminiUsedTokens = monthTokens
+
+                let weekStartStr = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(UsageParser.startTimestamp(for: .weekly, now: now))))
+                let dayStartStr = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(UsageParser.startTimestamp(for: .daily, now: now))))
+                let fiveHStartStr = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(UsageParser.startTimestamp(for: .fiveHours, now: now))))
+
+                if let w = try? await queryCloudMonitoring(projectId: projectId, token: token, filter: tokenFilter, startStr: weekStartStr, endStr: endStr) {
+                    self.geminiUsedWeekly = w
+                }
+                if let d = try? await queryCloudMonitoring(projectId: projectId, token: token, filter: tokenFilter, startStr: dayStartStr, endStr: endStr) {
+                    self.geminiUsedDaily = d
+                }
+                if let h = try? await queryCloudMonitoring(projectId: projectId, token: token, filter: tokenFilter, startStr: fiveHStartStr, endStr: endStr) {
+                    self.geminiUsed5h = h
+                }
+
                 geminiStatus = "GCPトークン連携中"
                 return
             }
@@ -423,16 +788,16 @@ final class UsageMonitor: ObservableObject {
                 projectId: projectId,
                 token: token,
                 filter: requestCountFilter,
-                startStr: startStr,
+                startStr: monthStartStr,
                 endStr: endStr
             )
             if reqCount > 0 {
-                geminiStatus = "GCP (\(reqCount) reqs / ローカル併用)"
+                geminiStatus = "GCP (\(reqCount) reqs / 実ログ併用)"
             } else {
-                geminiStatus = "GCP連携済 (ローカル併用)"
+                geminiStatus = "GCP連携済 (実ログ併用)"
             }
         } catch {
-            geminiStatus = "Cloud API未取得 (ローカル維持)"
+            geminiStatus = "Cloud API未取得 (実ログ維持)"
         }
     }
 
@@ -501,7 +866,6 @@ final class UsageMonitor: ObservableObject {
                     return
                 }
 
-                // Timeout after 8 seconds to prevent UI/refresh deadlock
                 let timeoutWorkItem = DispatchWorkItem {
                     if process.isRunning {
                         process.terminate()
@@ -535,6 +899,14 @@ func formatTokenCount(_ count: Int) -> String {
     }
 }
 
+func formatResetTimestamp(_ epoch: Int?) -> String? {
+    guard let epoch, epoch > 0 else { return nil }
+    let date = Date(timeIntervalSince1970: TimeInterval(epoch))
+    let formatter = DateFormatter()
+    formatter.dateFormat = "MM/dd HH:mm"
+    return formatter.string(from: date)
+}
+
 func gaugeColor(for remainingRatio: Double) -> Color {
     if remainingRatio < 0.15 {
         return .red
@@ -555,19 +927,99 @@ func gaugeWarningSymbol(for remainingRatio: Double) -> String? {
     }
 }
 
+// MARK: - Single Period Limit Row View
+struct PeriodLimitRowView: View {
+    let metric: PeriodUsageMetric
+    let isHighlighted: Bool
+
+    var body: some View {
+        let ratio = metric.remainingRatio
+        let pct = metric.remainingPercent
+
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                HStack(spacing: 2) {
+                    Text(metric.period.label)
+                        .font(.system(size: 10, weight: isHighlighted ? .bold : .semibold))
+                        .foregroundStyle(isHighlighted ? .primary : .secondary)
+                    if metric.serverUsedPercent != nil {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.cyan)
+                            .help("サーバー公式レート制限値と同期済み")
+                    }
+                }
+                .frame(width: 44, alignment: .leading)
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.12))
+                            .frame(height: 6)
+                        Capsule()
+                            .fill(gaugeColor(for: ratio))
+                            .frame(width: max(3, geo.size.width * ratio), height: 6)
+                            .animation(.easeInOut(duration: 0.25), value: ratio)
+                    }
+                }
+                .frame(height: 6)
+
+                HStack(spacing: 2) {
+                    if let warningSymbol = gaugeWarningSymbol(for: ratio) {
+                        Image(systemName: warningSymbol)
+                            .font(.system(size: 9))
+                            .foregroundStyle(gaugeColor(for: ratio))
+                    }
+                    Text("\(formatTokenCount(metric.remainingTokens))/\(formatTokenCount(metric.effectiveLimitTokens))")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%3d%%", pct))
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(gaugeColor(for: ratio))
+                        .frame(width: 32, alignment: .trailing)
+                }
+            }
+
+            if let resetStr = formatResetTimestamp(metric.resetTimestamp) {
+                HStack {
+                    Spacer()
+                    Text("リセット: \(resetStr)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.secondary.opacity(0.85))
+                }
+            }
+        }
+        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(isHighlighted ? Color.primary.opacity(0.06) : Color.clear)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(metric.period.label)制限")
+        .accessibilityValue("残り \(formatTokenCount(metric.remainingTokens)) / 上限 \(formatTokenCount(metric.effectiveLimitTokens)) (\(pct)パーセント)")
+    }
+}
+
 // MARK: - Provider Section View
 struct ProviderUsageSection: View {
     let title: String
     let iconName: String
     let usedCostUSD: Double
     let budgetUSD: Double
-    let remainingTokens: Int
-    let tokenLimit: Int
-    let remainingRatio: Double
+    let metrics: [PeriodUsageMetric]
+    let selectedFilter: LimitPeriod?
+    let highlightedPeriod: LimitPeriod?
     let status: String
 
+    var displayedMetrics: [PeriodUsageMetric] {
+        if let filter = selectedFilter {
+            return metrics.filter { $0.period == filter }
+        }
+        return metrics
+    }
+
     var body: some View {
-        let pct = Int((remainingRatio * 100).rounded())
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Label(title, systemImage: iconName)
@@ -578,32 +1030,21 @@ struct ProviderUsageSection: View {
                     .foregroundStyle(.primary)
             }
 
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.primary.opacity(0.12))
-                        .frame(height: 8)
-                    Capsule()
-                        .fill(gaugeColor(for: remainingRatio))
-                        .frame(width: max(4, geo.size.width * remainingRatio), height: 8)
-                        .animation(.easeInOut(duration: 0.25), value: remainingRatio)
+            VStack(spacing: 3) {
+                ForEach(displayedMetrics) { metric in
+                    PeriodLimitRowView(
+                        metric: metric,
+                        isHighlighted: highlightedPeriod == metric.period && selectedFilter == nil
+                    )
                 }
             }
-            .frame(height: 8)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(title) 残りトークン割合")
-            .accessibilityValue("\(pct)パーセント")
 
-            HStack(spacing: 4) {
-                if let warningSymbol = gaugeWarningSymbol(for: remainingRatio) {
-                    Image(systemName: warningSymbol)
-                        .font(.system(size: 10))
-                        .foregroundStyle(gaugeColor(for: remainingRatio))
-                        .accessibilityHidden(true)
+            HStack {
+                if let minMetric = metrics.min(by: { $0.remainingRatio < $1.remainingRatio }) {
+                    Text("最小残量枠: \(minMetric.period.label) (\(minMetric.remainingPercent)%)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
-                Text("残り: \(formatTokenCount(remainingTokens)) / \(formatTokenCount(tokenLimit)) (\(pct)%)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
                 Spacer()
                 Text(status)
                     .font(.system(size: 10))
@@ -616,7 +1057,6 @@ struct ProviderUsageSection: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color.primary.opacity(0.05))
         )
-        .accessibilityElement(children: .combine)
     }
 }
 
@@ -626,20 +1066,36 @@ struct SettingsPopoverView: View {
     @State private var revealAdminKey: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("AIMeter 設定")
+        VStack(alignment: .leading, spacing: 10) {
+            Text("AIMeter 制限・API設定")
                 .font(.headline)
+
+            HStack {
+                Text("メニューバー表示基準:")
+                    .font(.caption)
+                Spacer()
+                Picker("", selection: $monitor.menuBarPeriodMode) {
+                    Text("最小残量 (min)").tag("min")
+                    Text("5時間 (5h)").tag("5h")
+                    Text("1日 (1d)").tag("1d")
+                    Text("週次 (7d)").tag("7d")
+                    Text("月次 (30d)").tag("30d")
+                }
+                .labelsHidden()
+                .frame(width: 135)
+            }
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("OpenAI 設定 (Keychain保護)").font(.subheadline.bold())
+            // OpenAI Settings
+            VStack(alignment: .leading, spacing: 5) {
+                Text("OpenAI / Codex 設定 (Keychain保護)").font(.subheadline.bold())
                 HStack(spacing: 4) {
                     if revealAdminKey {
-                        TextField("Admin Key (sk-admin-...)", text: $monitor.openaiAdminKey)
+                        TextField("Admin Key (任意 / 未設定時はCodex実ログ)", text: $monitor.openaiAdminKey)
                             .textFieldStyle(.roundedBorder)
                     } else {
-                        SecureField("Admin Key (sk-admin-...)", text: $monitor.openaiAdminKey)
+                        SecureField("Admin Key (任意 / 未設定時はCodex実ログ)", text: $monitor.openaiAdminKey)
                             .textFieldStyle(.roundedBorder)
                     }
                     Button {
@@ -649,50 +1105,48 @@ struct SettingsPopoverView: View {
                             .font(.system(size: 11))
                     }
                     .buttonStyle(.borderless)
-                    .help(revealAdminKey ? "キーを隠す" : "キーを表示")
                 }
+
+                limitInputRow(label: "5時間上限トークン:", value: $monitor.openaiTokenLimit5h)
+                limitInputRow(label: "1日上限トークン:", value: $monitor.openaiTokenLimitDaily)
+                limitInputRow(label: "週次上限トークン:", value: $monitor.openaiTokenLimitWeekly)
+                limitInputRow(label: "月次上限トークン:", value: $monitor.openaiTokenLimit)
+
                 HStack {
-                    Text("月間上限トークン:")
-                    Spacer()
-                    TextField("Tokens", value: $monitor.openaiTokenLimit, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 110)
-                }
-                HStack {
-                    Text("月間予算 ($):")
+                    Text("月間予算目安 ($):").font(.caption)
                     Spacer()
                     TextField("USD", value: $monitor.openaiBudgetUSD, format: .number)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 110)
+                        .frame(width: 105)
                 }
             }
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Gemini / GCP 設定").font(.subheadline.bold())
-                TextField("GCP Project ID", text: $monitor.gcpProjectId)
+            // Gemini Settings
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Gemini / Antigravity 設定").font(.subheadline.bold())
+                TextField("GCP Project ID (任意 / 未設定時は実ログ)", text: $monitor.gcpProjectId)
                     .textFieldStyle(.roundedBorder)
+
+                limitInputRow(label: "5時間上限トークン:", value: $monitor.geminiTokenLimit5h)
+                limitInputRow(label: "1日上限トークン:", value: $monitor.geminiTokenLimitDaily)
+                limitInputRow(label: "週次上限トークン:", value: $monitor.geminiTokenLimitWeekly)
+                limitInputRow(label: "月次上限トークン:", value: $monitor.geminiTokenLimit)
+
                 HStack {
-                    Text("月間上限トークン:")
-                    Spacer()
-                    TextField("Tokens", value: $monitor.geminiTokenLimit, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 110)
-                }
-                HStack {
-                    Text("月間予算 ($):")
+                    Text("月間予算目安 ($):").font(.caption)
                     Spacer()
                     TextField("USD", value: $monitor.geminiBudgetUSD, format: .number)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 110)
+                        .frame(width: 105)
                 }
             }
 
             Divider()
 
             HStack {
-                Text("ローカルファイル: ~/.ai_meter_usage.json")
+                Text("自動集計: ~/.codex & ~/.gemini")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -707,7 +1161,18 @@ struct SettingsPopoverView: View {
             }
         }
         .padding(14)
-        .frame(width: 310)
+        .frame(width: 325)
+    }
+
+    @ViewBuilder
+    private func limitInputRow(label: String, value: Binding<Int>) -> some View {
+        HStack {
+            Text(label).font(.caption)
+            Spacer()
+            TextField("Tokens", value: value, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 105)
+        }
     }
 }
 
@@ -752,6 +1217,7 @@ struct AIMeterCardView: View {
     @ObservedObject var monitor: UsageMonitor
     var isMenuBar: Bool = false
     @State private var showSettings: Bool = false
+    @State private var filterSelection: String = "all"
     @Environment(\.openWindow) private var openWindow
 
     private static let timeFormatter: DateFormatter = {
@@ -760,8 +1226,16 @@ struct AIMeterCardView: View {
         return f
     }()
 
+    private var selectedPeriodFilter: LimitPeriod? {
+        LimitPeriod(rawValue: filterSelection)
+    }
+
+    private var highlightedMenuBarPeriod: LimitPeriod? {
+        LimitPeriod(rawValue: monitor.menuBarPeriodMode)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             // Header
             HStack {
                 HStack(spacing: 6) {
@@ -797,15 +1271,26 @@ struct AIMeterCardView: View {
                 }
             }
 
+            // Period Filter Tabs (All / 5h / 1d / Weekly / Monthly)
+            Picker("表示枠", selection: $filterSelection) {
+                Text("全枠").tag("all")
+                ForEach(LimitPeriod.allCases) { period in
+                    Text(period.label).tag(period.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+
             // OpenAI Section
             ProviderUsageSection(
-                title: "OpenAI (GPT)",
+                title: "OpenAI (GPT / Codex)",
                 iconName: "sparkles",
                 usedCostUSD: monitor.openaiCostUSD,
                 budgetUSD: monitor.openaiBudgetUSD,
-                remainingTokens: monitor.openaiRemainingTokens,
-                tokenLimit: monitor.openaiTokenLimit,
-                remainingRatio: monitor.openaiRemainingRatio,
+                metrics: monitor.openaiMetrics,
+                selectedFilter: selectedPeriodFilter,
+                highlightedPeriod: highlightedMenuBarPeriod,
                 status: monitor.openaiStatus
             )
 
@@ -815,9 +1300,9 @@ struct AIMeterCardView: View {
                 iconName: "bolt.horizontal.circle.fill",
                 usedCostUSD: monitor.geminiCostUSD,
                 budgetUSD: monitor.geminiBudgetUSD,
-                remainingTokens: monitor.geminiRemainingTokens,
-                tokenLimit: monitor.geminiTokenLimit,
-                remainingRatio: monitor.geminiRemainingRatio,
+                metrics: monitor.geminiMetrics,
+                selectedFilter: selectedPeriodFilter,
+                highlightedPeriod: highlightedMenuBarPeriod,
                 status: monitor.geminiStatus
             )
 
@@ -827,7 +1312,7 @@ struct AIMeterCardView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(String(format: "当月合計: $%.2f", monitor.totalCostUSD))
+                Text(String(format: "30日相当: $%.2f", monitor.totalCostUSD))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
             }
 
@@ -856,7 +1341,7 @@ struct AIMeterCardView: View {
             }
         }
         .padding(14)
-        .frame(width: 310)
+        .frame(width: 335)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.ultraThinMaterial)
