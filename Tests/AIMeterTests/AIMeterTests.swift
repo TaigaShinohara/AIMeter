@@ -294,4 +294,91 @@ final class AIMeterTests: XCTestCase {
         )
         XCTAssertEqual(sectionUnfiltered.displayedMetrics.count, 3)
     }
+
+    func testProviderUnitAndCompactUsageFormatting() {
+        XCTAssertEqual(providerUnit(for: "cursor"), "req")
+        XCTAssertEqual(providerUnit(for: "copilot"), "req")
+        XCTAssertEqual(providerUnit(for: "windsurf"), "req")
+        XCTAssertEqual(providerUnit(for: "poe"), "req")
+        XCTAssertEqual(providerUnit(for: "devin"), "req")
+
+        XCTAssertEqual(providerUnit(for: "openai"), "tokens")
+        XCTAssertEqual(providerUnit(for: "gemini"), "tokens")
+        XCTAssertEqual(providerUnit(for: "claude"), "tokens")
+        XCTAssertEqual(providerUnit(for: "grokbot"), "tokens")
+
+        // Token formatting
+        XCTAssertEqual(formatCompactUsage(140_000_000, unit: "tokens"), "140M")
+        XCTAssertEqual(formatCompactUsage(2_500_000, unit: "tokens"), "2.5M")
+        XCTAssertEqual(formatCompactUsage(45_000, unit: "tokens"), "45K")
+        XCTAssertEqual(formatCompactUsage(500, unit: "tokens"), "500")
+
+        // Request formatting
+        XCTAssertEqual(formatCompactUsage(23, unit: "req"), "23")
+        XCTAssertEqual(formatCompactUsage(1_500, unit: "req"), "1.5K")
+        XCTAssertEqual(formatCompactUsage(25_000, unit: "req"), "25K")
+    }
+
+    func testProgressiveDisclosureSummaryFiltering() {
+        let metrics = [
+            PeriodUsageMetric(period: .twoHours, usedTokens: 900, limitTokens: 1000),   // 10% remaining (bottleneck)
+            PeriodUsageMetric(period: .fiveHours, usedTokens: 500, limitTokens: 1000),  // 50% remaining
+            PeriodUsageMetric(period: .daily, usedTokens: 300, limitTokens: 1000),      // 70% remaining
+            PeriodUsageMetric(period: .weekly, usedTokens: 200, limitTokens: 1000),     // 80% remaining
+            PeriodUsageMetric(period: .monthly, usedTokens: 100, limitTokens: 1000)     // 90% remaining (monthly)
+        ]
+
+        // Detailed mode (isDetailed = true) shows all 5
+        let detailedSection = ProviderUsageSection(
+            title: "Test",
+            subtitle: "",
+            usedCostUSD: 10.0,
+            budgetUSD: 50.0,
+            metrics: metrics,
+            selectedFilter: nil,
+            highlightedPeriod: nil,
+            isDetailed: true
+        )
+        XCTAssertEqual(detailedSection.displayedMetrics.count, 5)
+
+        // Summary mode (isDetailed = false) shows bottleneck (2h) and monthly (30d) = 2
+        let summarySection = ProviderUsageSection(
+            title: "Test",
+            subtitle: "",
+            usedCostUSD: 10.0,
+            budgetUSD: 50.0,
+            metrics: metrics,
+            selectedFilter: nil,
+            highlightedPeriod: nil,
+            isDetailed: false
+        )
+        XCTAssertEqual(summarySection.displayedMetrics.count, 2)
+        XCTAssertEqual(summarySection.displayedMetrics[0].period, .twoHours)
+        XCTAssertEqual(summarySection.displayedMetrics[1].period, .monthly)
+
+        // When bottleneck IS the monthly limit, show only 1 row
+        let monthlyBottleneckMetrics = [
+            PeriodUsageMetric(period: .twoHours, usedTokens: 100, limitTokens: 1000),
+            PeriodUsageMetric(period: .monthly, usedTokens: 950, limitTokens: 1000) // 5% remaining
+        ]
+        let singleRowSummary = ProviderUsageSection(
+            title: "Test",
+            subtitle: "",
+            usedCostUSD: 10.0,
+            budgetUSD: 50.0,
+            metrics: monthlyBottleneckMetrics,
+            selectedFilter: nil,
+            highlightedPeriod: nil,
+            isDetailed: false
+        )
+        XCTAssertEqual(singleRowSummary.displayedMetrics.count, 1)
+        XCTAssertEqual(singleRowSummary.displayedMetrics.first?.period, .monthly)
+    }
+
+    func testMenuBarDisplayModeLabels() {
+        XCTAssertEqual(MenuBarDisplayMode.smart.label, "最逼迫のみ (推奨)")
+        XCTAssertEqual(MenuBarDisplayMode.compact.label, "コンパクト (2つ)")
+        XCTAssertEqual(MenuBarDisplayMode.iconOnly.label, "数値のみ")
+        XCTAssertEqual(MenuBarDisplayMode.all.label, "すべて表示")
+    }
 }

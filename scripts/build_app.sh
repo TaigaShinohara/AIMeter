@@ -14,6 +14,7 @@ MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+rm -f "${MACOS_DIR}/AIMeter"
 cp ".build/release/AIMeter" "${MACOS_DIR}/AIMeter"
 chmod +x "${MACOS_DIR}/AIMeter"
 

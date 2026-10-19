@@ -34,6 +34,59 @@ enum LimitPeriod: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+// MARK: - MenuBar Display Mode
+enum MenuBarDisplayMode: String, CaseIterable, Codable, Identifiable {
+    case smart = "smart"       // 最も逼迫しているサービス1つ（推奨: ノッチ衝突完全回避）
+    case compact = "compact"   // 上位2サービス
+    case iconOnly = "iconOnly" // 残り数値のみ
+    case all = "all"           // 従来の全表示
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .smart: return "最逼迫のみ (推奨)"
+        case .compact: return "コンパクト (2つ)"
+        case .iconOnly: return "数値のみ"
+        case .all: return "すべて表示"
+        }
+    }
+}
+
+// MARK: - Service Bottleneck Snapshot
+struct ServiceBottleneck: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let shortName: String
+    let iconName: String
+    let remainingPercent: Int
+    let remainingRatio: Double
+    let bottleneckPeriod: LimitPeriod
+}
+
+// MARK: - Unit Helper
+func providerUnit(for providerId: String) -> String {
+    let lower = providerId.lowercased()
+    if lower.contains("cursor") || lower.contains("copilot") || lower.contains("windsurf") || lower.contains("poe") || lower.contains("devin") {
+        return "req"
+    }
+    return "tokens"
+}
+
+func formatCompactUsage(_ count: Int, unit: String) -> String {
+    if unit == "req" {
+        if count >= 10_000 {
+            return String(format: "%.0fK", Double(count) / 1_000.0)
+        } else if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000.0)
+        } else {
+            return "\(max(0, count))"
+        }
+    } else {
+        return formatCompactTokenCount(count)
+    }
+}
+
 // MARK: - Per-Period Usage & Limit Snapshot
 struct PeriodUsageMetric: Equatable, Identifiable {
     let period: LimitPeriod
@@ -820,6 +873,9 @@ final class UsageMonitor: ObservableObject {
 
     // MenuBar Display Period Mode ("min" = bottleneck or LimitPeriod.rawValue)
     @AppStorage("menuBarPeriodMode") var menuBarPeriodMode: String = "min"
+    @AppStorage("menuBarDisplayMode") var menuBarDisplayMode: String = "smart"
+    @AppStorage("isDetailedView") var isDetailedView: Bool = false
+    @AppStorage("isWidgetPinned") var isWidgetPinned: Bool = true
 
     // OpenAI Used Tokens per Period
     @Published var openaiUsed2h: Int = 0
@@ -1134,24 +1190,88 @@ final class UsageMonitor: ObservableObject {
         return metrics.map(\.remainingRatio).min() ?? (metrics.last?.remainingRatio ?? 0.0)
     }
 
-    var menuBarTitle: String {
-        var segments: [String] = []
-        if showOpenAISection {
-            let gptPct = Int((activeRatio(for: openaiMetrics) * 100).rounded())
-            segments.append("GPT:\(gptPct)%")
+    var activeBottlenecks: [ServiceBottleneck] {
+        var list: [ServiceBottleneck] = []
+        if showOpenAISection, !openaiMetrics.isEmpty {
+            if let minMetric = openaiMetrics.min(by: { $0.remainingRatio < $1.remainingRatio }) {
+                list.append(ServiceBottleneck(
+                    id: "openai",
+                    name: "OpenAI",
+                    shortName: "GPT",
+                    iconName: "brain.head.profile",
+                    remainingPercent: minMetric.remainingPercent,
+                    remainingRatio: minMetric.remainingRatio,
+                    bottleneckPeriod: minMetric.period
+                ))
+            }
         }
-        if showGeminiSection {
-            let gemPct = Int((activeRatio(for: geminiMetrics) * 100).rounded())
-            segments.append("Gem:\(gemPct)%")
+        if showGeminiSection, !geminiMetrics.isEmpty {
+            if let minMetric = geminiMetrics.min(by: { $0.remainingRatio < $1.remainingRatio }) {
+                list.append(ServiceBottleneck(
+                    id: "gemini",
+                    name: "Gemini",
+                    shortName: "Gem",
+                    iconName: "sparkle",
+                    remainingPercent: minMetric.remainingPercent,
+                    remainingRatio: minMetric.remainingRatio,
+                    bottleneckPeriod: minMetric.period
+                ))
+            }
         }
         for sub in customSubscriptions where sub.isEnabled && sub.showInMenuBar {
-            let pct = Int((activeRatio(for: metrics(for: sub)) * 100).rounded())
-            segments.append("\(sub.shortName):\(pct)%")
+            let m = metrics(for: sub)
+            if let minMetric = m.min(by: { $0.remainingRatio < $1.remainingRatio }) {
+                list.append(ServiceBottleneck(
+                    id: sub.id,
+                    name: sub.name,
+                    shortName: sub.shortName,
+                    iconName: sub.iconName,
+                    remainingPercent: minMetric.remainingPercent,
+                    remainingRatio: minMetric.remainingRatio,
+                    bottleneckPeriod: minMetric.period
+                ))
+            }
         }
-        if segments.isEmpty {
+        return list.sorted(by: { $0.remainingRatio < $1.remainingRatio })
+    }
+
+    var menuBarTitle: String {
+        let bottlenecks = activeBottlenecks
+        guard !bottlenecks.isEmpty else {
             return "AIMeter"
         }
-        return segments.joined(separator: " ")
+
+        let mode = MenuBarDisplayMode(rawValue: menuBarDisplayMode) ?? .smart
+        switch mode {
+        case .smart:
+            if let first = bottlenecks.first {
+                return "\(first.shortName):\(first.remainingPercent)%"
+            }
+            return "AIMeter"
+        case .compact:
+            let topTwo = bottlenecks.prefix(2)
+            return topTwo.map { "\($0.shortName):\($0.remainingPercent)%" }.joined(separator: " ")
+        case .iconOnly:
+            if let first = bottlenecks.first {
+                return "\(first.remainingPercent)%"
+            }
+            return "AIMeter"
+        case .all:
+            var segments: [String] = []
+            if showOpenAISection {
+                let gptPct = Int((activeRatio(for: openaiMetrics) * 100).rounded())
+                segments.append("GPT:\(gptPct)%")
+            }
+            if showGeminiSection {
+                let gemPct = Int((activeRatio(for: geminiMetrics) * 100).rounded())
+                segments.append("Gem:\(gemPct)%")
+            }
+            for sub in customSubscriptions where sub.isEnabled && sub.showInMenuBar {
+                let pct = Int((activeRatio(for: metrics(for: sub)) * 100).rounded())
+                segments.append("\(sub.shortName):\(pct)%")
+            }
+            return segments.isEmpty ? "AIMeter" : segments.joined(separator: " ")
+        }
     }
 
     func refresh() async {
@@ -1601,10 +1721,12 @@ func gaugeWarningSymbol(for remainingRatio: Double) -> String? {
 struct PeriodLimitRowView: View {
     let metric: PeriodUsageMetric
     let isHighlighted: Bool
+    var unit: String = "tokens"
 
     var body: some View {
         let ratio = metric.remainingRatio
         let pct = metric.remainingPercent
+        let usageText = formatCompactUsage(metric.remainingTokens, unit: unit)
 
         HStack(spacing: 6) {
             // 1. Period Label
@@ -1628,11 +1750,18 @@ struct PeriodLimitRowView: View {
             }
             .frame(height: 12)
 
-            // 3. Remaining Amount (or Reset Time hint)
-            Text("残 \(formatCompactTokenCount(metric.remainingTokens))")
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 62, alignment: .trailing)
+            // 3. Remaining Amount with Unit
+            HStack(spacing: 2) {
+                Text("残 \(usageText)")
+                if unit == "req" {
+                    Text("req")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .font(.system(size: 11).monospacedDigit())
+            .foregroundStyle(.secondary)
+            .frame(width: 68, alignment: .trailing)
 
             // 4. Remaining Percentage
             Text("\(pct)%")
@@ -1643,7 +1772,7 @@ struct PeriodLimitRowView: View {
         .padding(.vertical, 1.5)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(metric.period.label)制限")
-        .accessibilityValue("残り \(formatCompactTokenCount(metric.remainingTokens)) (\(pct)パーセント)")
+        .accessibilityValue("残り \(usageText) \(unit) (\(pct)パーセント)")
     }
 }
 
@@ -1656,10 +1785,24 @@ struct ProviderUsageSection: View {
     let metrics: [PeriodUsageMetric]
     let selectedFilter: LimitPeriod?
     let highlightedPeriod: LimitPeriod?
+    var unit: String = "tokens"
+    var isDetailed: Bool = true
 
     var displayedMetrics: [PeriodUsageMetric] {
         if let filter = selectedFilter {
             return metrics.filter { $0.period == filter }
+        }
+        if isDetailed {
+            return metrics
+        }
+        // Progressive Disclosure (Summary mode): Show bottleneck + monthly
+        guard !metrics.isEmpty else { return [] }
+        if let bottleneck = metrics.min(by: { $0.remainingRatio < $1.remainingRatio }) {
+            let monthly = metrics.first(where: { $0.period == .monthly })
+            if let monthly, monthly.period != bottleneck.period {
+                return [bottleneck, monthly]
+            }
+            return [bottleneck]
         }
         return metrics
     }
@@ -1693,9 +1836,15 @@ struct ProviderUsageSection: View {
                     Spacer()
 
                     if let resetInfo = activeResetString {
-                        Text(resetInfo)
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(.secondary)
+                        if usedCostUSD > 0 {
+                            Text(String(format: "$%.2f · %@", usedCostUSD, resetInfo))
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(resetInfo)
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
                     } else if usedCostUSD > 0 || budgetUSD > 0 {
                         Text(String(format: "$%.2f", usedCostUSD))
                             .font(.system(size: 11).monospacedDigit())
@@ -1708,7 +1857,8 @@ struct ProviderUsageSection: View {
                     ForEach(displayedMetrics) { metric in
                         PeriodLimitRowView(
                             metric: metric,
-                            isHighlighted: highlightedPeriod == metric.period && selectedFilter == nil
+                            isHighlighted: highlightedPeriod == metric.period && selectedFilter == nil,
+                            unit: unit
                         )
                     }
                 }
@@ -1723,19 +1873,35 @@ struct ProviderUsageSection: View {
     }
 }
 
-// MARK: - Settings View (Simple & Readable)
+// MARK: - Settings View (Clean, Unified & Progressive)
 struct SettingsPopoverView: View {
     @ObservedObject var monitor: UsageMonitor
     var onOpenSetupWizard: (() -> Void)? = nil
     var onOpenHelp: (() -> Void)? = nil
     var onClose: (() -> Void)? = nil
     @State private var revealAdminKey: Bool = false
-    @State private var selectedTab: Int = 0
+    @State private var expandedServiceIds: Set<String> = []
+
+    private func isExpanded(_ id: String) -> Bool {
+        expandedServiceIds.contains(id)
+    }
+
+    private func toggleExpanded(_ id: String) {
+        if expandedServiceIds.contains(id) {
+            expandedServiceIds.remove(id)
+        } else {
+            expandedServiceIds.insert(id)
+        }
+    }
+
+    private func isPresetAdded(_ id: String) -> Bool {
+        monitor.customSubscriptions.contains { $0.id == id || $0.id.hasPrefix("\(id)_") }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             // Top Bar
-            HStack {
+            HStack(spacing: 8) {
                 if let onClose {
                     Button {
                         onClose()
@@ -1767,7 +1933,7 @@ struct SettingsPopoverView: View {
                             Image(systemName: "sparkles")
                             Text("初期セットアップ")
                         }
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(.tint)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 4)
@@ -1788,7 +1954,7 @@ struct SettingsPopoverView: View {
                             Image(systemName: "questionmark.circle")
                             Text("ヘルプ")
                         }
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 4)
@@ -1805,40 +1971,75 @@ struct SettingsPopoverView: View {
 
                 HStack(spacing: 4) {
                     Text("メニューバー:")
-                        .font(.system(size: 12.5))
+                        .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
-                    Picker("", selection: $monitor.menuBarPeriodMode) {
-                        Text("最小残量").tag("min")
-                        Text("2時間").tag("2h")
-                        Text("5時間").tag("5h")
-                        Text("1日").tag("1d")
-                        Text("週次").tag("7d")
-                        Text("月次").tag("30d")
+                    Picker("", selection: $monitor.menuBarDisplayMode) {
+                        ForEach(MenuBarDisplayMode.allCases) { mode in
+                            Text(mode.label).tag(mode.rawValue)
+                        }
                     }
                     .labelsHidden()
-                    .frame(width: 100)
+                    .frame(width: 135)
                 }
             }
 
-            Picker("", selection: $selectedTab) {
-                Text("基本 (OpenAI / Gemini)").tag(0)
-                Text("AIサービス (\(monitor.customSubscriptions.count))").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.regular)
+            // Quick Add Service Bar
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 5) {
+                    presetButton(label: "+ Grok", id: "grokbot", preset: .grokbotPreset())
+                    presetButton(label: "+ Claude", id: "claude", preset: .claudePreset())
+                    presetButton(label: "+ Cursor", id: "cursor", preset: .cursorPreset())
+                    presetButton(label: "+ Windsurf", id: "windsurf", preset: .windsurfPreset())
+                    presetButton(label: "+ Copilot", id: "copilot", preset: .copilotPreset())
+                }
+                HStack(spacing: 5) {
+                    presetButton(label: "+ Devin", id: "devin", preset: .devinPreset())
+                    presetButton(label: "+ Perplexity", id: "perplexity", preset: .perplexityPreset())
+                    presetButton(label: "+ DeepSeek", id: "deepseek", preset: .deepseekPreset())
+                    presetButton(label: "+ Poe", id: "poe", preset: .poePreset())
+                    Button("+ 新規") {
+                        monitor.addSubscription(.blankCustom())
+                    }
+                    .controlSize(.small)
+                    .font(.system(size: 11))
 
-            if selectedTab == 0 {
-                builtInSettingsView
-            } else {
-                customSubscriptionsSettingsView
+                    Spacer()
+
+                    Button("自動検出") {
+                        monitor.autoAddDetectedSubscriptions()
+                    }
+                    .controlSize(.small)
+                    .font(.system(size: 11))
+                    .help("このMacにインストールされているAIツールを自動追加します")
+                }
             }
 
             Divider()
 
+            // Unified Services List
+            ScrollView {
+                VStack(spacing: 10) {
+                    // 1. OpenAI Service Card
+                    openAIServiceCard
+
+                    // 2. Gemini Service Card
+                    geminiServiceCard
+
+                    // 3. Custom / Detected AI Services Cards
+                    ForEach($monitor.customSubscriptions) { $sub in
+                        customSubscriptionCard(sub: $sub)
+                    }
+                }
+                .padding(.trailing, 4)
+            }
+            .frame(maxHeight: 360)
+
+            Divider()
+
+            // Footer
             HStack {
-                Text("ローカルログ自動集計対応")
-                    .font(.system(size: 12.5))
+                Text("Mac内実ログ自動解析 · ゼロ外部通信")
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
@@ -1850,7 +2051,7 @@ struct SettingsPopoverView: View {
                 } label: {
                     Text("完了")
                         .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 14)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
@@ -1862,14 +2063,71 @@ struct SettingsPopoverView: View {
     }
 
     @ViewBuilder
-    private var builtInSettingsView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                // OpenAI Group
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle("OpenAI / Codex", isOn: $monitor.showOpenAISection)
-                        .font(.system(size: 14, weight: .bold))
+    private func presetButton(label: String, id: String, preset: CustomSubscriptionConfig) -> some View {
+        let added = isPresetAdded(id)
+        Button(added ? "\(label.dropFirst(2)) 追加済" : label) {
+            monitor.addSubscription(preset)
+        }
+        .disabled(added)
+        .controlSize(.small)
+        .font(.system(size: 11))
+        .foregroundStyle(added ? Color.secondary.opacity(0.6) : Color.primary)
+    }
 
+    // MARK: - OpenAI Service Card
+    @ViewBuilder
+    private var openAIServiceCard: some View {
+        let isExpanded = isExpanded("openai")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: $monitor.showOpenAISection)
+                    .labelsHidden()
+                    .controlSize(.regular)
+
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.tint)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("OpenAI / Codex")
+                            .font(.system(size: 13.5, weight: .bold))
+                        Text("実ログ検出")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(RoundedRectangle(cornerRadius: 4).fill(Color.green.opacity(0.12)))
+                    }
+                    Text("月間計: \(formatCompactTokenCount(monitor.openaiUsedTokens)) tokens · $\(String(format: "%.2f", monitor.openaiCostUSD))")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        toggleExpanded("openai")
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        Text(isExpanded ? "閉じる" : "詳細設定")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.04)))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    Divider()
                     builtInPeriodToggleRow(isOpenAI: true, csv: monitor.openaiEnabledPeriodsCSV)
 
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .twoHours) {
@@ -1890,31 +2148,84 @@ struct SettingsPopoverView: View {
 
                     HStack(spacing: 6) {
                         if revealAdminKey {
-                            TextField("OpenAI Admin Key (任意)", text: $monitor.openaiAdminKey)
+                            TextField("OpenAI Admin Key (組織API集計用・任意)", text: $monitor.openaiAdminKey)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 12))
+                                .font(.system(size: 11.5))
                         } else {
-                            SecureField("OpenAI Admin Key (任意)", text: $monitor.openaiAdminKey)
+                            SecureField("OpenAI Admin Key (組織API集計用・任意)", text: $monitor.openaiAdminKey)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 12))
+                                .font(.system(size: 11.5))
                         }
                         Button {
                             revealAdminKey.toggle()
                         } label: {
                             Image(systemName: revealAdminKey ? "eye.slash" : "eye")
-                                .font(.system(size: 12))
+                                .font(.system(size: 11))
                         }
                         .buttonStyle(.borderless)
                     }
                 }
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+                .padding(.top, 4)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
+    }
 
-                // Gemini Group
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Google Gemini", isOn: $monitor.showGeminiSection)
-                        .font(.system(size: 14, weight: .bold))
+    // MARK: - Gemini Service Card
+    @ViewBuilder
+    private var geminiServiceCard: some View {
+        let isExpanded = isExpanded("gemini")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: $monitor.showGeminiSection)
+                    .labelsHidden()
+                    .controlSize(.regular)
 
+                Image(systemName: "sparkle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.tint)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("Google Gemini")
+                            .font(.system(size: 13.5, weight: .bold))
+                        Text(monitor.geminiUsedTokens > 0 ? "実ログ検出" : "スタンバイ")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(monitor.geminiUsedTokens > 0 ? Color.green : Color.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(RoundedRectangle(cornerRadius: 4).fill(monitor.geminiUsedTokens > 0 ? Color.green.opacity(0.12) : Color.primary.opacity(0.06)))
+                    }
+                    Text("月間計: \(formatCompactTokenCount(monitor.geminiUsedTokens)) tokens · $\(String(format: "%.2f", monitor.geminiCostUSD))")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        toggleExpanded("gemini")
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        Text(isExpanded ? "閉じる" : "詳細設定")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.04)))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    Divider()
                     builtInPeriodToggleRow(isOpenAI: false, csv: monitor.geminiEnabledPeriodsCSV)
 
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .twoHours) {
@@ -1933,23 +2244,163 @@ struct SettingsPopoverView: View {
                         limitInputRow(label: "月次上限", value: $monitor.geminiTokenLimit)
                     }
 
-                    TextField("GCP Project ID (任意)", text: $monitor.gcpProjectId)
+                    TextField("GCP Project ID (Cloud Monitoring同期用・任意)", text: $monitor.gcpProjectId)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12))
+                        .font(.system(size: 11.5))
                 }
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+                .padding(.top, 4)
             }
-            .padding(.trailing, 4)
         }
-        .frame(maxHeight: 360)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
+    }
+
+    // MARK: - Custom Subscription Card
+    @ViewBuilder
+    private func customSubscriptionCard(sub: Binding<CustomSubscriptionConfig>) -> some View {
+        let currentSub = sub.wrappedValue
+        let isExpanded = isExpanded(currentSub.id)
+        let live = monitor.customProviderLiveUsage[currentSub.id]
+        let unit = providerUnit(for: currentSub.id)
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: sub.isEnabled)
+                    .labelsHidden()
+                    .controlSize(.regular)
+
+                Image(systemName: currentSub.iconName)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.tint)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(currentSub.name)
+                            .font(.system(size: 13.5, weight: .bold))
+
+                        if let status = live?.status ?? (currentSub.statusNote.isEmpty ? nil : currentSub.statusNote) {
+                            Text(status)
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(.blue)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1.5)
+                                .background(RoundedRectangle(cornerRadius: 4).fill(Color.blue.opacity(0.12)))
+                        }
+                    }
+
+                    let monthlyCount = live?.usedByPeriod?.monthly ?? currentSub.manualUsedMonthly
+                    Text("月間計: \(formatCompactUsage(monthlyCount, unit: unit)) \(unit) · $\(String(format: "%.2f", monitor.effectiveCostUSD(for: currentSub)))")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Toggle("メニューバー", isOn: sub.showInMenuBar)
+                    .font(.system(size: 11))
+                    .controlSize(.small)
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        toggleExpanded(currentSub.id)
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        Text(isExpanded ? "閉じる" : "詳細")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.04)))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    monitor.removeSubscription(id: currentSub.id)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .padding(4)
+                }
+                .buttonStyle(.plain)
+                .help("サービスを削除")
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    Divider()
+
+                    HStack(spacing: 8) {
+                        TextField("サービス名", text: sub.name)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                        TextField("略称", text: sub.shortName)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                            .frame(width: 60)
+                        TextField("月額 ($)", value: sub.usedCostUSD, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                            .frame(width: 80)
+                    }
+
+                    HStack(spacing: 6) {
+                        Text("表示枠")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        ForEach(LimitPeriod.allCases) { period in
+                            let isOn = currentSub.isPeriodEnabled(period)
+                            Button {
+                                sub.wrappedValue.setPeriod(period, enabled: !isOn)
+                            } label: {
+                                Text(period.label)
+                                    .font(.system(size: 11.5, weight: isOn ? .semibold : .regular))
+                                    .foregroundStyle(isOn ? .primary : .secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                            .fill(isOn ? Color.primary.opacity(0.14) : Color.primary.opacity(0.04))
+                                    )
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    if currentSub.isPeriodEnabled(.twoHours) {
+                        periodPairRow(label: "2時間 (使用 / 上限)", used: sub.manualUsed2h, limit: sub.limit2h)
+                    }
+                    if currentSub.isPeriodEnabled(.fiveHours) {
+                        periodPairRow(label: "5時間 (使用 / 上限)", used: sub.manualUsed5h, limit: sub.limit5h)
+                    }
+                    if currentSub.isPeriodEnabled(.daily) {
+                        periodPairRow(label: "1日 (使用 / 上限)", used: sub.manualUsedDaily, limit: sub.limitDaily)
+                    }
+                    if currentSub.isPeriodEnabled(.weekly) {
+                        periodPairRow(label: "週次 (使用 / 上限)", used: sub.manualUsedWeekly, limit: sub.limitWeekly)
+                    }
+                    if currentSub.isPeriodEnabled(.monthly) {
+                        periodPairRow(label: "月次 (使用 / 上限)", used: sub.manualUsedMonthly, limit: sub.limitMonthly)
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
     }
 
     @ViewBuilder
     private func builtInPeriodToggleRow(isOpenAI: Bool, csv: String) -> some View {
         HStack(spacing: 6) {
             Text("表示枠")
-                .font(.system(size: 12))
+                .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
             Spacer()
             ForEach(LimitPeriod.allCases) { period in
@@ -1958,10 +2409,10 @@ struct SettingsPopoverView: View {
                     monitor.setBuiltInPeriod(isOpenAI: isOpenAI, period: period, enabled: !isOn)
                 } label: {
                     Text(period.label)
-                        .font(.system(size: 12, weight: isOn ? .semibold : .regular))
+                        .font(.system(size: 11.5, weight: isOn ? .semibold : .regular))
                         .foregroundStyle(isOn ? .primary : .secondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
                         .background(
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(isOn ? Color.primary.opacity(0.14) : Color.primary.opacity(0.04))
@@ -1974,161 +2425,22 @@ struct SettingsPopoverView: View {
     }
 
     @ViewBuilder
-    private var customSubscriptionsSettingsView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Row 1: Primary AI Services + Auto-detect
-            HStack(spacing: 5) {
-                Button("+ Grok") { monitor.addSubscription(.grokbotPreset()) }
-                Button("+ Claude") { monitor.addSubscription(.claudePreset()) }
-                Button("+ Cursor") { monitor.addSubscription(.cursorPreset()) }
-                Button("+ Windsurf") { monitor.addSubscription(.windsurfPreset()) }
-                Button("+ Copilot") { monitor.addSubscription(.copilotPreset()) }
-            }
-            .controlSize(.small)
-            .font(.system(size: 12))
-
-            // Row 2: Extended AI Services + Custom + Auto-detect
-            HStack(spacing: 5) {
-                Button("+ Devin") { monitor.addSubscription(.devinPreset()) }
-                Button("+ Perplexity") { monitor.addSubscription(.perplexityPreset()) }
-                Button("+ DeepSeek") { monitor.addSubscription(.deepseekPreset()) }
-                Button("+ Poe") { monitor.addSubscription(.poePreset()) }
-                Button("+ 新規") { monitor.addSubscription(.blankCustom()) }
-                Spacer()
-                Button("自動検出") {
-                    monitor.autoAddDetectedSubscriptions()
-                }
-                .help("このMacにインストールされているAIツールを自動追加します")
-            }
-            .controlSize(.small)
-            .font(.system(size: 12))
-
-            if monitor.customSubscriptions.isEmpty {
-                Text("上のボタンから監視したいAIサービスを追加できます。")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 32)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach($monitor.customSubscriptions) { $sub in
-                            customSubscriptionEditorCard(sub: $sub)
-                        }
-                    }
-                    .padding(.trailing, 4)
-                }
-                .frame(maxHeight: 300)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func customSubscriptionEditorCard(sub: Binding<CustomSubscriptionConfig>) -> some View {
-        let currentSub = sub.wrappedValue
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Toggle("", isOn: sub.isEnabled)
-                    .labelsHidden()
-                    .controlSize(.regular)
-                TextField("名前", text: sub.name)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13.5, weight: .bold))
-                TextField("略称", text: sub.shortName)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13))
-                    .frame(width: 56)
-                Toggle("メニューバー", isOn: sub.showInMenuBar)
-                    .font(.system(size: 12.5))
-                    .controlSize(.small)
-                Button {
-                    monitor.removeSubscription(id: currentSub.id)
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .padding(4)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-
-            HStack(spacing: 6) {
-                Text("表示枠")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                ForEach(LimitPeriod.allCases) { period in
-                    let isOn = currentSub.isPeriodEnabled(period)
-                    Button {
-                        sub.wrappedValue.setPeriod(period, enabled: !isOn)
-                    } label: {
-                        Text(period.label)
-                            .font(.system(size: 12, weight: isOn ? .semibold : .regular))
-                            .foregroundStyle(isOn ? .primary : .secondary)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 4)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(isOn ? Color.primary.opacity(0.14) : Color.primary.opacity(0.04))
-                            )
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            if currentSub.isPeriodEnabled(.twoHours) {
-                periodPairRow(label: "2時間 (使用 / 上限)", used: sub.manualUsed2h, limit: sub.limit2h)
-            }
-            if currentSub.isPeriodEnabled(.fiveHours) {
-                periodPairRow(label: "5時間 (使用 / 上限)", used: sub.manualUsed5h, limit: sub.limit5h)
-            }
-            if currentSub.isPeriodEnabled(.daily) {
-                periodPairRow(label: "1日 (使用 / 上限)", used: sub.manualUsedDaily, limit: sub.limitDaily)
-            }
-            if currentSub.isPeriodEnabled(.weekly) {
-                periodPairRow(label: "週次 (使用 / 上限)", used: sub.manualUsedWeekly, limit: sub.limitWeekly)
-            }
-            if currentSub.isPeriodEnabled(.monthly) {
-                periodPairRow(label: "月次 (使用 / 上限)", used: sub.manualUsedMonthly, limit: sub.limitMonthly)
-            }
-
-            HStack {
-                Text("月額料金 ($)")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                TextField("USD", value: sub.usedCostUSD, format: .number)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12.5))
-                    .frame(width: 90)
-            }
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
-        )
-    }
-
-    @ViewBuilder
     private func periodPairRow(label: String, used: Binding<Int>, limit: Binding<Int>) -> some View {
         HStack(spacing: 6) {
             Text(label)
-                .font(.system(size: 12.5))
+                .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
             Spacer()
             TextField("使用", value: used, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12))
-                .frame(width: 90)
+                .font(.system(size: 11.5))
+                .frame(width: 80)
             Text("/")
                 .foregroundStyle(.secondary)
             TextField("上限", value: limit, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12))
-                .frame(width: 90)
+                .font(.system(size: 11.5))
+                .frame(width: 80)
         }
     }
 
@@ -2136,13 +2448,13 @@ struct SettingsPopoverView: View {
     private func limitInputRow(label: String, value: Binding<Int>) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 12.5))
+                .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
             Spacer()
             TextField("Tokens", value: value, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12))
-                .frame(width: 130)
+                .font(.system(size: 11.5))
+                .frame(width: 120)
         }
     }
 }
@@ -2154,14 +2466,96 @@ final class FirstMouseHostingHelperView: NSView {
     }
 }
 
+func closeDesktopWidgetWindow() {
+    DispatchQueue.main.async {
+        for window in NSApp.windows where window.identifier?.rawValue.contains("desktop-widget") == true || window.title == "AI Meter Widget" {
+            window.close()
+        }
+    }
+}
+
+func miniaturizeDesktopWidgetWindow() {
+    DispatchQueue.main.async {
+        for window in NSApp.windows where window.identifier?.rawValue.contains("desktop-widget") == true || window.title == "AI Meter Widget" {
+            window.miniaturize(nil)
+        }
+    }
+}
+
+func openOrRestoreDesktopWidgetWindow(openWindow: @escaping (String) -> Void) {
+    DispatchQueue.main.async {
+        var found = false
+        for window in NSApp.windows where window.identifier?.rawValue.contains("desktop-widget") == true || window.title == "AI Meter Widget" {
+            found = true
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+        if !found {
+            openWindow("desktop-widget")
+        }
+    }
+}
+
+// MARK: - Mac-style Traffic Light Buttons for Widget
+struct MacWindowTrafficLights: View {
+    let onClose: () -> Void
+    let onMiniaturize: () -> Void
+    @State private var isHovering: Bool = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // 赤ボタン: 閉じる
+            Button(action: onClose) {
+                ZStack {
+                    Circle()
+                        .fill(Color(red: 1.0, green: 0.36, blue: 0.33))
+                        .overlay(Circle().strokeBorder(Color(red: 0.86, green: 0.18, blue: 0.18), lineWidth: 0.5))
+                    Image(systemName: "xmark")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(Color.black.opacity(isHovering ? 0.75 : 0.35))
+                }
+                .frame(width: 12, height: 12)
+                .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("閉じる (⌘W)")
+            .accessibilityLabel("閉じる")
+
+            // 黄ボタン: 最小化
+            Button(action: onMiniaturize) {
+                ZStack {
+                    Circle()
+                        .fill(Color(red: 1.0, green: 0.74, blue: 0.18))
+                        .overlay(Circle().strokeBorder(Color(red: 0.86, green: 0.60, blue: 0.10), lineWidth: 0.5))
+                    Image(systemName: "minus")
+                        .font(.system(size: 7, weight: .heavy))
+                        .foregroundStyle(Color.black.opacity(isHovering ? 0.75 : 0.35))
+                }
+                .frame(width: 12, height: 12)
+                .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("最小化 (⌘M)")
+            .accessibilityLabel("最小化")
+        }
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+}
+
 struct DesktopWidgetWindowAccessor: NSViewRepresentable {
     var allowBackgroundDrag: Bool = true
+    var isPinned: Bool = true
 
     func makeNSView(context: Context) -> NSView {
         let view = FirstMouseHostingHelperView()
         DispatchQueue.main.async {
             if let window = view.window {
-                Self.configure(window: window, allowBackgroundDrag: allowBackgroundDrag)
+                Self.configure(window: window, allowBackgroundDrag: allowBackgroundDrag, isPinned: isPinned)
             }
         }
         return view
@@ -2170,13 +2564,15 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             if let window = nsView.window {
-                Self.configure(window: window, allowBackgroundDrag: allowBackgroundDrag)
+                Self.configure(window: window, allowBackgroundDrag: allowBackgroundDrag, isPinned: isPinned)
             }
         }
     }
 
-    static func configure(window: NSWindow, allowBackgroundDrag: Bool) {
-        window.level = .floating
+    static func configure(window: NSWindow, allowBackgroundDrag: Bool, isPinned: Bool) {
+        // macOS標準アプリのように閉じたり最小化できるようスタイルマスクを有効化
+        window.styleMask.insert([.titled, .closable, .miniaturizable])
+        window.level = isPinned ? .floating : .normal
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isMovableByWindowBackground = allowBackgroundDrag
         window.backgroundColor = .clear
@@ -2299,12 +2695,45 @@ struct AIMeterCardView: View {
             } else {
                 // Header
                 HStack(spacing: 6) {
+                    // ウィジェット専用: macOS標準スタイルのトラフィックライト（閉じる・最小化）
+                    if !isMenuBar {
+                        MacWindowTrafficLights(
+                            onClose: {
+                                closeDesktopWidgetWindow()
+                            },
+                            onMiniaturize: {
+                                miniaturizeDesktopWidgetWindow()
+                            }
+                        )
+                        .padding(.trailing, 2)
+                    }
+
                     Text("AIMeter")
                         .font(.system(size: 13.5, weight: .bold))
                         .foregroundStyle(.primary)
 
                     Spacer()
 
+                    // 詳細/サマリ切り替えボタン
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            monitor.isDetailedView.toggle()
+                        }
+                    } label: {
+                        Image(systemName: monitor.isDetailedView ? "list.bullet.indent" : "rectangle.split.1x2")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(monitor.isDetailedView ? Color.accentColor : Color.secondary)
+                            .frame(width: 24, height: 22)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(monitor.isDetailedView ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.06))
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(monitor.isDetailedView ? "サマリ表示に切り替え" : "全期間の詳細を表示")
+
+                    // 更新ボタン
                     Button {
                         Task {
                             await monitor.refresh()
@@ -2324,6 +2753,28 @@ struct AIMeterCardView: View {
                     .help("更新")
                     .accessibilityLabel("今すぐ更新")
 
+                    // ウィジェット専用: 最前面ピン留めトグル
+                    if !isMenuBar {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                monitor.isWidgetPinned.toggle()
+                            }
+                        } label: {
+                            Image(systemName: monitor.isWidgetPinned ? "pin.fill" : "pin.slash")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(monitor.isWidgetPinned ? Color.accentColor : Color.secondary)
+                                .frame(width: 24, height: 22)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                        .fill(monitor.isWidgetPinned ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.06))
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(monitor.isWidgetPinned ? "最前面固定中 (クリックで通常ウィンドウへ)" : "通常ウィンドウ (クリックで最前面固定へ)")
+                    }
+
+                    // ヘルプボタン
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             showHelp = true
@@ -2343,6 +2794,7 @@ struct AIMeterCardView: View {
                     .help("ヘルプ & Q&A")
                     .accessibilityLabel("ヘルプを開く")
 
+                    // 設定ボタン
                     Button {
                         NSApplication.shared.activate(ignoringOtherApps: true)
                         withAnimation(.easeInOut(duration: 0.15)) {
@@ -2415,8 +2867,17 @@ struct AIMeterCardView: View {
                 if isMenuBar {
                     Divider()
                     HStack {
-                        Button("ウィジェットを表示") {
-                            openWindow(id: "desktop-widget")
+                        let isWidgetOpen = NSApp.windows.contains { w in
+                            (w.identifier?.rawValue.contains("desktop-widget") == true || w.title == "AI Meter Widget") && w.isVisible && !w.isMiniaturized
+                        }
+                        Button(isWidgetOpen ? "ウィジェットを閉じる" : "ウィジェットを表示") {
+                            if isWidgetOpen {
+                                closeDesktopWidgetWindow()
+                            } else {
+                                openOrRestoreDesktopWidgetWindow { id in
+                                    openWindow(id: id)
+                                }
+                            }
                         }
                         .controlSize(.small)
 
@@ -2443,7 +2904,30 @@ struct AIMeterCardView: View {
         .background(
             Group {
                 if !isMenuBar {
-                    DesktopWidgetWindowAccessor(allowBackgroundDrag: !showSettings && !isDisplayingWizard && !showHelp)
+                    DesktopWidgetWindowAccessor(
+                        allowBackgroundDrag: !showSettings && !isDisplayingWizard && !showHelp,
+                        isPinned: monitor.isWidgetPinned
+                    )
+                }
+            }
+        )
+        .background(
+            Group {
+                if !isMenuBar {
+                    // ⌘W / ESC: ウィジェットを閉じる
+                    Button("") {
+                        closeDesktopWidgetWindow()
+                    }
+                    .keyboardShortcut("w", modifiers: .command)
+                    .keyboardShortcut(.cancelAction)
+                    .opacity(0)
+
+                    // ⌘M: ウィジェットを最小化
+                    Button("") {
+                        miniaturizeDesktopWidgetWindow()
+                    }
+                    .keyboardShortcut("m", modifiers: .command)
+                    .opacity(0)
                 }
             }
         )
@@ -2460,7 +2944,9 @@ struct AIMeterCardView: View {
                     budgetUSD: monitor.openaiBudgetUSD,
                     metrics: monitor.openaiMetrics,
                     selectedFilter: selectedPeriodFilter,
-                    highlightedPeriod: highlightedMenuBarPeriod
+                    highlightedPeriod: highlightedMenuBarPeriod,
+                    unit: "tokens",
+                    isDetailed: monitor.isDetailedView
                 )
             }
 
@@ -2472,7 +2958,9 @@ struct AIMeterCardView: View {
                     budgetUSD: monitor.geminiBudgetUSD,
                     metrics: monitor.geminiMetrics,
                     selectedFilter: selectedPeriodFilter,
-                    highlightedPeriod: highlightedMenuBarPeriod
+                    highlightedPeriod: highlightedMenuBarPeriod,
+                    unit: "tokens",
+                    isDetailed: monitor.isDetailedView
                 )
             }
 
@@ -2484,7 +2972,9 @@ struct AIMeterCardView: View {
                     budgetUSD: sub.budgetUSD,
                     metrics: monitor.metrics(for: sub),
                     selectedFilter: selectedPeriodFilter,
-                    highlightedPeriod: highlightedMenuBarPeriod
+                    highlightedPeriod: highlightedMenuBarPeriod,
+                    unit: providerUnit(for: sub.id),
+                    isDetailed: monitor.isDetailedView
                 )
             }
         }
