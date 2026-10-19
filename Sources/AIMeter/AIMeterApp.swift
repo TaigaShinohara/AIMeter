@@ -1609,38 +1609,38 @@ struct PeriodLimitRowView: View {
         HStack(spacing: 8) {
             // 1. Period Label
             Text(metric.period.label)
-                .font(.system(size: 11, weight: isHighlighted ? .semibold : .regular))
+                .font(.system(size: 13, weight: isHighlighted ? .bold : .medium))
                 .foregroundStyle(isHighlighted ? .primary : .secondary)
-                .frame(width: 38, alignment: .leading)
+                .frame(width: 44, alignment: .leading)
 
             // 2. Clean Progress Bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(Color.primary.opacity(0.08))
-                        .frame(height: 5)
+                        .frame(height: 6)
                     Capsule()
                         .fill(gaugeColor(for: ratio))
-                        .frame(width: max(3, geo.size.width * ratio), height: 5)
+                        .frame(width: max(3, geo.size.width * ratio), height: 6)
                         .animation(.easeInOut(duration: 0.2), value: ratio)
                 }
                 .frame(maxHeight: .infinity, alignment: .center)
             }
-            .frame(height: 14)
+            .frame(height: 16)
 
             // 3. Remaining Amount (or Reset Time hint)
             Text("残 \(formatCompactTokenCount(metric.remainingTokens))")
-                .font(.system(size: 11).monospacedDigit())
+                .font(.system(size: 12.5).monospacedDigit())
                 .foregroundStyle(.secondary)
-                .frame(width: 60, alignment: .trailing)
+                .frame(width: 72, alignment: .trailing)
 
             // 4. Remaining Percentage
             Text("\(pct)%")
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .font(.system(size: 13.5, weight: .bold).monospacedDigit())
                 .foregroundStyle(percentageTextColor(for: ratio))
-                .frame(width: 38, alignment: .trailing)
+                .frame(width: 44, alignment: .trailing)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(metric.period.label)制限")
         .accessibilityValue("残り \(formatCompactTokenCount(metric.remainingTokens)) (\(pct)パーセント)")
@@ -1675,16 +1675,16 @@ struct ProviderUsageSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             // Section Header
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(.primary)
 
                 if !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.system(size: 10))
+                        .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
                 }
 
@@ -1692,17 +1692,17 @@ struct ProviderUsageSection: View {
 
                 if let resetInfo = activeResetString {
                     Text(resetInfo)
-                        .font(.system(size: 10).monospacedDigit())
+                        .font(.system(size: 12).monospacedDigit())
                         .foregroundStyle(.secondary)
                 } else if usedCostUSD > 0 || budgetUSD > 0 {
                     Text(String(format: "$%.2f", usedCostUSD))
-                        .font(.system(size: 11).monospacedDigit())
+                        .font(.system(size: 12).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
             }
 
             // Period Rows
-            VStack(spacing: 3) {
+            VStack(spacing: 4) {
                 ForEach(displayedMetrics) { metric in
                     PeriodLimitRowView(
                         metric: metric,
@@ -1730,7 +1730,7 @@ struct SettingsPopoverView: View {
     @State private var selectedTab: Int = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             // Top Bar
             HStack {
                 if let onClose {
@@ -1741,7 +1741,7 @@ struct SettingsPopoverView: View {
                             Image(systemName: "chevron.left")
                             Text("戻る")
                         }
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(
@@ -1754,20 +1754,20 @@ struct SettingsPopoverView: View {
                 }
 
                 Text("設定")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 15, weight: .bold))
 
                 if let onOpenSetupWizard {
                     Button {
                         onOpenSetupWizard()
                     } label: {
-                        HStack(spacing: 3) {
+                        HStack(spacing: 4) {
                             Image(systemName: "sparkles")
                             Text("初期セットアップ")
                         }
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.tint)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
                         .background(
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(Color.accentColor.opacity(0.1))
@@ -1781,14 +1781,14 @@ struct SettingsPopoverView: View {
                     Button {
                         onOpenHelp()
                     } label: {
-                        HStack(spacing: 3) {
+                        HStack(spacing: 4) {
                             Image(systemName: "questionmark.circle")
                             Text("ヘルプ")
                         }
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
                         .background(
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(Color.primary.opacity(0.06))
@@ -1802,7 +1802,7 @@ struct SettingsPopoverView: View {
 
                 HStack(spacing: 4) {
                     Text("メニューバー:")
-                        .font(.system(size: 11))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
                     Picker("", selection: $monitor.menuBarPeriodMode) {
                         Text("最小残量").tag("min")
@@ -1813,7 +1813,7 @@ struct SettingsPopoverView: View {
                         Text("月次").tag("30d")
                     }
                     .labelsHidden()
-                    .frame(width: 90)
+                    .frame(width: 100)
                 }
             }
 
@@ -1823,6 +1823,7 @@ struct SettingsPopoverView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .controlSize(.regular)
 
             if selectedTab == 0 {
                 builtInSettingsView
@@ -1834,7 +1835,7 @@ struct SettingsPopoverView: View {
 
             HStack {
                 Text("ローカルログ自動集計対応")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
@@ -1845,11 +1846,11 @@ struct SettingsPopoverView: View {
                     onClose?()
                 } label: {
                     Text("完了")
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 10)
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 12)
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .controlSize(.regular)
             }
         }
         .onAppear {
@@ -1860,11 +1861,11 @@ struct SettingsPopoverView: View {
     @ViewBuilder
     private var builtInSettingsView: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
                 // OpenAI Group
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
                     Toggle("OpenAI / Codex", isOn: $monitor.showOpenAISection)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 14, weight: .bold))
 
                     builtInPeriodToggleRow(isOpenAI: true, csv: monitor.openaiEnabledPeriodsCSV)
 
@@ -1884,32 +1885,32 @@ struct SettingsPopoverView: View {
                         limitInputRow(label: "月次上限", value: $monitor.openaiTokenLimit)
                     }
 
-                    HStack(spacing: 4) {
+                    HStack(spacing: 6) {
                         if revealAdminKey {
                             TextField("OpenAI Admin Key (任意)", text: $monitor.openaiAdminKey)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 11))
+                                .font(.system(size: 12))
                         } else {
                             SecureField("OpenAI Admin Key (任意)", text: $monitor.openaiAdminKey)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 11))
+                                .font(.system(size: 12))
                         }
                         Button {
                             revealAdminKey.toggle()
                         } label: {
                             Image(systemName: revealAdminKey ? "eye.slash" : "eye")
-                                .font(.system(size: 11))
+                                .font(.system(size: 12))
                         }
                         .buttonStyle(.borderless)
                     }
                 }
-                .padding(10)
+                .padding(12)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
 
                 // Gemini Group
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
                     Toggle("Google Gemini", isOn: $monitor.showGeminiSection)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 14, weight: .bold))
 
                     builtInPeriodToggleRow(isOpenAI: false, csv: monitor.geminiEnabledPeriodsCSV)
 
@@ -1931,21 +1932,21 @@ struct SettingsPopoverView: View {
 
                     TextField("GCP Project ID (任意)", text: $monitor.gcpProjectId)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                 }
-                .padding(10)
+                .padding(12)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
             }
             .padding(.trailing, 4)
         }
-        .frame(maxHeight: 330)
+        .frame(maxHeight: 360)
     }
 
     @ViewBuilder
     private func builtInPeriodToggleRow(isOpenAI: Bool, csv: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Text("表示枠")
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             Spacer()
             ForEach(LimitPeriod.allCases) { period in
@@ -1954,10 +1955,10 @@ struct SettingsPopoverView: View {
                     monitor.setBuiltInPeriod(isOpenAI: isOpenAI, period: period, enabled: !isOn)
                 } label: {
                     Text(period.label)
-                        .font(.system(size: 10, weight: isOn ? .semibold : .regular))
+                        .font(.system(size: 12, weight: isOn ? .semibold : .regular))
                         .foregroundStyle(isOn ? .primary : .secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
                         .background(
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(isOn ? Color.primary.opacity(0.14) : Color.primary.opacity(0.04))
@@ -1971,9 +1972,9 @@ struct SettingsPopoverView: View {
 
     @ViewBuilder
     private var customSubscriptionsSettingsView: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             // Row 1: Primary AI Services + Auto-detect
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Button("+ Grok") { monitor.addSubscription(.grokbotPreset()) }
                 Button("+ Claude") { monitor.addSubscription(.claudePreset()) }
                 Button("+ Cursor") { monitor.addSubscription(.cursorPreset()) }
@@ -1981,9 +1982,10 @@ struct SettingsPopoverView: View {
                 Button("+ Copilot") { monitor.addSubscription(.copilotPreset()) }
             }
             .controlSize(.small)
+            .font(.system(size: 12))
 
             // Row 2: Extended AI Services + Custom + Auto-detect
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Button("+ Devin") { monitor.addSubscription(.devinPreset()) }
                 Button("+ Perplexity") { monitor.addSubscription(.perplexityPreset()) }
                 Button("+ DeepSeek") { monitor.addSubscription(.deepseekPreset()) }
@@ -1996,23 +1998,24 @@ struct SettingsPopoverView: View {
                 .help("このMacにインストールされているAIツールを自動追加します")
             }
             .controlSize(.small)
+            .font(.system(size: 12))
 
             if monitor.customSubscriptions.isEmpty {
                 Text("上のボタンから監視したいAIサービスを追加できます。")
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 32)
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 12) {
                         ForEach($monitor.customSubscriptions) { $sub in
                             customSubscriptionEditorCard(sub: $sub)
                         }
                     }
                     .padding(.trailing, 4)
                 }
-                .frame(maxHeight: 270)
+                .frame(maxHeight: 300)
             }
         }
     }
@@ -2020,23 +2023,26 @@ struct SettingsPopoverView: View {
     @ViewBuilder
     private func customSubscriptionEditorCard(sub: Binding<CustomSubscriptionConfig>) -> some View {
         let currentSub = sub.wrappedValue
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
                 Toggle("", isOn: sub.isEnabled)
                     .labelsHidden()
+                    .controlSize(.regular)
                 TextField("名前", text: sub.name)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13.5, weight: .bold))
                 TextField("略称", text: sub.shortName)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 48)
+                    .font(.system(size: 13))
+                    .frame(width: 56)
                 Toggle("メニューバー", isOn: sub.showInMenuBar)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12.5))
+                    .controlSize(.small)
                 Button {
                     monitor.removeSubscription(id: currentSub.id)
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 11))
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                         .padding(4)
                         .contentShape(Rectangle())
@@ -2044,9 +2050,9 @@ struct SettingsPopoverView: View {
                 .buttonStyle(.plain)
             }
 
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Text("表示枠")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                 Spacer()
                 ForEach(LimitPeriod.allCases) { period in
@@ -2055,10 +2061,10 @@ struct SettingsPopoverView: View {
                         sub.wrappedValue.setPeriod(period, enabled: !isOn)
                     } label: {
                         Text(period.label)
-                            .font(.system(size: 10, weight: isOn ? .semibold : .regular))
+                            .font(.system(size: 12, weight: isOn ? .semibold : .regular))
                             .foregroundStyle(isOn ? .primary : .secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                                     .fill(isOn ? Color.primary.opacity(0.14) : Color.primary.opacity(0.04))
@@ -2087,15 +2093,16 @@ struct SettingsPopoverView: View {
 
             HStack {
                 Text("月額料金 ($)")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(.secondary)
                 Spacer()
                 TextField("USD", value: sub.usedCostUSD, format: .number)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 80)
+                    .font(.system(size: 12.5))
+                    .frame(width: 90)
             }
         }
-        .padding(10)
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.primary.opacity(0.04))
@@ -2104,19 +2111,21 @@ struct SettingsPopoverView: View {
 
     @ViewBuilder
     private func periodPairRow(label: String, used: Binding<Int>, limit: Binding<Int>) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Text(label)
-                .font(.system(size: 11))
+                .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
             Spacer()
             TextField("使用", value: used, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 80)
+                .font(.system(size: 12))
+                .frame(width: 90)
             Text("/")
                 .foregroundStyle(.secondary)
             TextField("上限", value: limit, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 80)
+                .font(.system(size: 12))
+                .frame(width: 90)
         }
     }
 
@@ -2124,12 +2133,13 @@ struct SettingsPopoverView: View {
     private func limitInputRow(label: String, value: Binding<Int>) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 11))
+                .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
             Spacer()
             TextField("Tokens", value: value, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 115)
+                .font(.system(size: 12))
+                .frame(width: 130)
         }
     }
 }
@@ -2266,7 +2276,7 @@ struct AIMeterCardView: View {
                 // Header
                 HStack(spacing: 8) {
                     Text("AIMeter")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.primary)
 
                     Spacer()
@@ -2277,11 +2287,11 @@ struct AIMeterCardView: View {
                         }
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .frame(width: 24, height: 22)
+                            .frame(width: 28, height: 26)
                             .background(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .fill(Color.primary.opacity(0.06))
                             )
                             .contentShape(Rectangle())
@@ -2296,11 +2306,11 @@ struct AIMeterCardView: View {
                         }
                     } label: {
                         Image(systemName: "questionmark.circle")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .frame(width: 24, height: 22)
+                            .frame(width: 28, height: 26)
                             .background(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .fill(Color.primary.opacity(0.06))
                             )
                             .contentShape(Rectangle())
@@ -2319,12 +2329,12 @@ struct AIMeterCardView: View {
                             Image(systemName: "slider.horizontal.3")
                             Text("設定")
                         }
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .frame(height: 22)
+                        .padding(.horizontal, 9)
+                        .frame(height: 26)
                         .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 .fill(Color.primary.opacity(0.06))
                         )
                         .contentShape(Rectangle())
@@ -2343,14 +2353,14 @@ struct AIMeterCardView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .controlSize(.small)
+                .controlSize(.regular)
 
                 // Provider Sections
                 if totalVisibleProvidersCount > 2 {
                     ScrollView {
                         providerSectionsStack
                     }
-                    .frame(maxHeight: 360)
+                    .frame(maxHeight: 400)
                 } else {
                     providerSectionsStack
                 }
@@ -2358,11 +2368,11 @@ struct AIMeterCardView: View {
                 // Quiet Footer
                 HStack {
                     Text("\(Self.timeFormatter.string(from: monitor.lastUpdated)) 更新")
-                        .font(.system(size: 11).monospacedDigit())
+                        .font(.system(size: 12).monospacedDigit())
                         .foregroundStyle(.tertiary)
                     Spacer()
                     Text(String(format: "月間計 $%.2f", monitor.totalCostUSD))
-                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 2)
@@ -2373,20 +2383,20 @@ struct AIMeterCardView: View {
                         Button("ウィジェットを表示") {
                             openWindow(id: "desktop-widget")
                         }
-                        .controlSize(.small)
+                        .controlSize(.regular)
 
                         Spacer()
 
                         Button("終了") {
                             NSApplication.shared.terminate(nil)
                         }
-                        .controlSize(.small)
+                        .controlSize(.regular)
                     }
                 }
             }
         }
-        .padding(14)
-        .frame(width: showHelp ? 380 : ((isDisplayingWizard && !showHelp) ? 460 : (showSettings ? 350 : 310)))
+        .padding(16)
+        .frame(width: showHelp ? 480 : ((isDisplayingWizard && !showHelp) ? 550 : (showSettings ? 420 : 360)))
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.regularMaterial)
@@ -2462,7 +2472,7 @@ struct AIMeterApp: App {
             AIMeterCardView(monitor: monitor, isMenuBar: true)
         } label: {
             Text(monitor.menuBarTitle)
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
         }
         .menuBarExtraStyle(.window)
     }

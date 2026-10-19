@@ -89,18 +89,18 @@ struct SetupWizardView: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             // Header
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "slider.horizontal.2.square")
-                    .font(.system(size: 26))
+                    .font(.system(size: 30))
                     .foregroundStyle(.tint)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("AIサービスの確認・初期セットアップ")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 16, weight: .bold))
                     Text("表示したいサービスの選択や、新規サービスの追加・パス指定を行えます。")
-                        .font(.system(size: 11))
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                 }
 
@@ -111,10 +111,10 @@ struct SetupWizardView: View {
                         onOpenHelp()
                     } label: {
                         Image(systemName: "questionmark.circle")
-                            .font(.system(size: 12))
+                            .font(.system(size: 14))
                     }
                     .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .controlSize(.regular)
                     .help("ヘルプ・Q&Aを見る")
                 }
 
@@ -125,21 +125,21 @@ struct SetupWizardView: View {
                         isScanning = false
                     }
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         if isScanning {
                             ProgressView()
-                                .controlSize(.mini)
+                                .controlSize(.small)
                         } else {
                             Image(systemName: "arrow.clockwise")
                         }
                         Text("再検出")
                     }
-                    .font(.system(size: 11))
-                    .padding(.horizontal, 6)
+                    .font(.system(size: 13))
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
+                .controlSize(.regular)
                 .disabled(isScanning)
             }
 
@@ -147,9 +147,9 @@ struct SetupWizardView: View {
 
             // Service List & Add Service Section
             ScrollView {
-                VStack(spacing: 10) {
+                VStack(spacing: 12) {
                     // Standard Detected / Configured Services
-                    VStack(spacing: 8) {
+                    VStack(spacing: 10) {
                         ForEach(standardServices) { service in
                             serviceRowView(service: service)
                         }
@@ -165,14 +165,14 @@ struct SetupWizardView: View {
                 }
                 .padding(.trailing, 4)
             }
-            .frame(maxHeight: 330)
+            .frame(maxHeight: 360)
 
             Divider()
 
             // Footer Actions
             HStack {
                 Text("\(enabledServicesCount) 個のサービスを表示中")
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
 
                 Spacer()
@@ -183,11 +183,12 @@ struct SetupWizardView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
+                .font(.system(size: 14, weight: .semibold))
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(16)
-        .frame(width: 450)
+        .padding(18)
+        .frame(width: 530)
         .onAppear {
             if monitor.customSubscriptions.isEmpty {
                 monitor.autoAddDetectedSubscriptions()
@@ -203,8 +204,8 @@ struct SetupWizardView: View {
         let preview = serviceUsagePreview(service)
         let customPath = monitor.customProviderPaths[service.id]
 
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
                 // Toggle Checkbox
                 Toggle("", isOn: Binding(
                     get: { isEnabled },
@@ -212,18 +213,18 @@ struct SetupWizardView: View {
                 ))
                 .labelsHidden()
                 .toggleStyle(.checkbox)
-                .controlSize(.small)
+                .controlSize(.regular)
 
                 // Icon + Name
                 Image(systemName: service.iconName)
-                    .font(.system(size: 13))
+                    .font(.system(size: 16))
                     .foregroundStyle(isEnabled ? .primary : .secondary)
-                    .frame(width: 18)
+                    .frame(width: 22)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
                         Text(service.name)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(isEnabled ? .primary : .secondary)
 
                         // Status Badge
@@ -237,8 +238,8 @@ struct SetupWizardView: View {
                     }
 
                     Text(preview)
-                        .font(.system(size: 10).monospacedDigit())
-                        .foregroundStyle(isDetected || customPath != nil ? Color.primary.opacity(0.8) : Color.secondary.opacity(0.6))
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(isDetected || customPath != nil ? Color.primary.opacity(0.85) : Color.secondary.opacity(0.6))
                 }
 
                 Spacer()
@@ -254,14 +255,14 @@ struct SetupWizardView: View {
                         validationResult = nil
                     }
                 } label: {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 4) {
                         Image(systemName: customPath != nil ? "folder.fill" : "folder.badge.gearshape")
                         Text(customPath != nil ? "パス変更" : "パス指定")
                     }
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                 }
                 .buttonStyle(.borderless)
-                .controlSize(.mini)
+                .controlSize(.small)
                 .foregroundStyle(customPath != nil ? Color.blue : Color.secondary)
             }
 
@@ -270,7 +271,7 @@ struct SetupWizardView: View {
                 pathEditorView(serviceId: service.id, defaultHint: service.defaultLogHint)
             }
         }
-        .padding(8)
+        .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isEnabled ? Color.primary.opacity(0.04) : Color.clear)
@@ -287,8 +288,8 @@ struct SetupWizardView: View {
         let customPath = monitor.customProviderPaths[sub.id]
         let isExpanded = activePathPickerProviderId == sub.id
 
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
                 Toggle("", isOn: Binding(
                     get: { sub.isEnabled },
                     set: { val in
@@ -299,16 +300,16 @@ struct SetupWizardView: View {
                 ))
                 .labelsHidden()
                 .toggleStyle(.checkbox)
-                .controlSize(.small)
+                .controlSize(.regular)
 
                 Image(systemName: sub.iconName)
-                    .font(.system(size: 13))
-                    .frame(width: 18)
+                    .font(.system(size: 16))
+                    .frame(width: 22)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
                         Text(sub.name)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 14, weight: .bold))
 
                         if customPath != nil {
                             badgeView(text: "手動指定", color: .blue)
@@ -319,11 +320,11 @@ struct SetupWizardView: View {
 
                     if let usage = monitor.customProviderLiveUsage[sub.id], let monthly = usage.usedByPeriod?.monthly, monthly > 0 {
                         Text("実ログ: \(formatTokenCount(monthly)) (\(usage.status ?? sub.statusNote))")
-                            .font(.system(size: 10).monospacedDigit())
-                            .foregroundStyle(Color.primary.opacity(0.8))
+                            .font(.system(size: 12).monospacedDigit())
+                            .foregroundStyle(Color.primary.opacity(0.85))
                     } else if !sub.statusNote.isEmpty {
                         Text(sub.statusNote)
-                            .font(.system(size: 10))
+                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -340,14 +341,14 @@ struct SetupWizardView: View {
                         validationResult = nil
                     }
                 } label: {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 4) {
                         Image(systemName: customPath != nil ? "folder.fill" : "folder.badge.gearshape")
                         Text(customPath != nil ? "パス変更" : "パス指定")
                     }
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                 }
                 .buttonStyle(.borderless)
-                .controlSize(.mini)
+                .controlSize(.small)
                 .foregroundStyle(customPath != nil ? Color.blue : Color.secondary)
 
                 Button {
@@ -355,7 +356,7 @@ struct SetupWizardView: View {
                     monitor.setCustomPath(for: sub.id, path: "")
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 11))
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -365,7 +366,7 @@ struct SetupWizardView: View {
                 pathEditorView(serviceId: sub.id, defaultHint: "~/path/to/logs")
             }
         }
-        .padding(8)
+        .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(sub.isEnabled ? Color.primary.opacity(0.04) : Color.clear)
@@ -379,20 +380,21 @@ struct SetupWizardView: View {
     // MARK: - Add New Service Section
     @ViewBuilder
     private var addServiceSectionView: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("+ サービスを追加")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(.secondary)
 
             // Preset Quick-add Buttons
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Button("+ Devin") { monitor.addSubscription(.devinPreset()) }
                 Button("+ Perplexity") { monitor.addSubscription(.perplexityPreset()) }
                 Button("+ DeepSeek") { monitor.addSubscription(.deepseekPreset()) }
                 Button("+ Poe") { monitor.addSubscription(.poePreset()) }
                 Button("+ Trae") { monitor.addSubscription(.traePreset()) }
             }
-            .controlSize(.mini)
+            .controlSize(.small)
+            .font(.system(size: 12))
 
             // Custom New Service Toggle
             Button {
@@ -400,11 +402,11 @@ struct SetupWizardView: View {
                     showNewServiceForm.toggle()
                 }
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Image(systemName: showNewServiceForm ? "chevron.up.circle.fill" : "plus.circle.fill")
                         .foregroundStyle(.tint)
                     Text(showNewServiceForm ? "カスタム作成を閉じる" : "新規カスタムAIを手動作成...")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                 }
             }
             .buttonStyle(.plain)
@@ -414,7 +416,7 @@ struct SetupWizardView: View {
                 newCustomServiceFormView
             }
         }
-        .padding(10)
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.primary.opacity(0.02))
@@ -428,25 +430,25 @@ struct SetupWizardView: View {
     // MARK: - New Custom Service Form
     @ViewBuilder
     private var newCustomServiceFormView: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Divider()
 
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 TextField("サービス名 (例: Local Ollama)", text: $newServiceName)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12.5))
 
                 TextField("略称 (例: Oll)", text: $newServiceShortName)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
-                    .frame(width: 80)
+                    .font(.system(size: 12.5))
+                    .frame(width: 90)
             }
 
             // Log Path with Browse Button
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 TextField("ログファイル / 保存先ディレクトリ (任意)", text: $newServicePath)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
 
                 Button("参照...") {
                     let panel = NSOpenPanel()
@@ -461,7 +463,7 @@ struct SetupWizardView: View {
                         newServicePath = url.path
                     }
                 }
-                .controlSize(.mini)
+                .controlSize(.small)
             }
 
             HStack {
@@ -475,7 +477,7 @@ struct SetupWizardView: View {
                         newServicePath = ""
                     }
                 }
-                .controlSize(.small)
+                .controlSize(.regular)
 
                 Button("サービスを追加") {
                     let name = newServiceName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -530,7 +532,7 @@ struct SetupWizardView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .controlSize(.regular)
                 .disabled(newServiceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -540,25 +542,25 @@ struct SetupWizardView: View {
     // MARK: - Path Editor View
     @ViewBuilder
     private func pathEditorView(serviceId: String, defaultHint: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("ログファイルまたはディレクトリを手動指定:")
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 TextField(defaultHint, text: $customPathInput)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
 
                 Button("参照...") {
                     selectFileOrFolder(for: serviceId)
                 }
-                .controlSize(.mini)
+                .controlSize(.small)
 
                 Button("検証 & 適用") {
                     validateAndApply(for: serviceId, path: customPathInput)
                 }
-                .controlSize(.mini)
+                .controlSize(.small)
                 .buttonStyle(.borderedProminent)
 
                 if monitor.customProviderPaths[serviceId] != nil {
@@ -568,22 +570,22 @@ struct SetupWizardView: View {
                         validationResult = nil
                         Task { await monitor.refresh() }
                     }
-                    .controlSize(.mini)
+                    .controlSize(.small)
                 }
             }
 
             if let result = validationResult {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Image(systemName: result.isValid ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(result.isValid ? .green : .orange)
                     Text(result.message)
-                        .font(.system(size: 10))
+                        .font(.system(size: 12))
                         .foregroundStyle(result.isValid ? .green : .orange)
                 }
                 .padding(.top, 2)
             }
         }
-        .padding(8)
+        .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.primary.opacity(0.04))
@@ -593,10 +595,10 @@ struct SetupWizardView: View {
     // MARK: - Helpers
     private func badgeView(text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .semibold))
+            .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(color)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1.5)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
             .background(
                 Capsule()
                     .fill(color.opacity(0.12))

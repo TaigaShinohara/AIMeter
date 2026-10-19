@@ -77,7 +77,7 @@ struct HelpView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             // Top Bar
             HStack(spacing: 8) {
                 Button {
@@ -87,8 +87,8 @@ struct HelpView: View {
                         Image(systemName: "chevron.left")
                         Text("戻る")
                     }
-                    .font(.system(size: 11, weight: .medium))
-                    .padding(.horizontal, 8)
+                    .font(.system(size: 13, weight: .medium))
+                    .padding(.horizontal, 9)
                     .padding(.vertical, 4)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -99,30 +99,31 @@ struct HelpView: View {
                 .buttonStyle(.plain)
 
                 Text("ヘルプ & よくある質問")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 15, weight: .bold))
 
                 Spacer()
 
                 Text("v1.1.0")
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                     .foregroundStyle(.tertiary)
             }
 
             // About AIMeter Card
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
                     Image(systemName: "gauge.with.needle.fill")
+                        .font(.system(size: 15))
                         .foregroundStyle(.tint)
                     Text("AIMeter について")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 14, weight: .bold))
                 }
 
                 Text("Mac 内で利用中の各 AI ツール（Cursor, Windsurf, Claude Code, GitHub Copilot, Gemini, OpenAI 等）のローカルログを直接解析し、リアルタイムの使用量・残量メーターと利用額を可視化するメニューバー＆ウィジェットアプリです。")
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
-                    .lineSpacing(2)
+                    .lineSpacing(3)
             }
-            .padding(10)
+            .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.accentColor.opacity(0.06))
@@ -133,27 +134,27 @@ struct HelpView: View {
             )
 
             // Search Filter
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                 TextField("質問やキーワードを検索...", text: $searchText)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
 
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 11))
+                            .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.primary.opacity(0.05))
@@ -161,10 +162,10 @@ struct HelpView: View {
 
             // Q&A List
             ScrollView {
-                VStack(spacing: 8) {
+                VStack(spacing: 10) {
                     if filteredQAs.isEmpty {
                         Text("該当する質問が見つかりませんでした。")
-                            .font(.system(size: 11))
+                            .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 24)
@@ -176,17 +177,17 @@ struct HelpView: View {
                 }
                 .padding(.trailing, 2)
             }
-            .frame(maxHeight: 290)
+            .frame(maxHeight: 340)
         }
-        .padding(14)
-        .frame(width: 380)
+        .padding(16)
+        .frame(width: 480)
     }
 
     @ViewBuilder
     private func qaRowView(item: QAItem) -> some View {
         let isExpanded = expandedQAIds.contains(item.id)
 
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     if isExpanded {
@@ -196,20 +197,20 @@ struct HelpView: View {
                     }
                 }
             } label: {
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .top, spacing: 7) {
                     Text("Q.")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 13.5, weight: .bold))
                         .foregroundStyle(.tint)
 
                     Text(item.question)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
 
                     Spacer()
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.secondary)
                         .padding(.top, 2)
                 }
@@ -218,26 +219,26 @@ struct HelpView: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .top, spacing: 7) {
                     Text("A.")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.secondary)
 
                     Text(item.answer)
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                        .lineSpacing(2)
+                        .lineSpacing(3)
                         .multilineTextAlignment(.leading)
                 }
                 .padding(.top, 2)
             }
         }
-        .padding(9)
+        .padding(11)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.primary.opacity(0.03))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
                 )
         )
