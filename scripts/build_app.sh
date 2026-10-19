@@ -47,7 +47,12 @@ cat > "${CONTENTS_DIR}/Info.plist" << 'EOF'
 </plist>
 EOF
 
-echo "[AIMeter] Signing app bundle (ad-hoc with bound Info.plist and bundled collector)..."
+echo "[AIMeter] Signing app bundle (ad-hoc with bound Info.plist)..."
 codesign --force --deep --sign - "${APP_DIR}"
 
-echo "[AIMeter] Successfully built and signed ${APP_DIR}"
+ZIP_NAME="AIMeter-macos-universal.zip"
+echo "[AIMeter] Creating distribution archive: ${ZIP_NAME}..."
+rm -f "${WORKSPACE_DIR}/${ZIP_NAME}"
+ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "${WORKSPACE_DIR}/${ZIP_NAME}"
+
+echo "[AIMeter] Successfully built ${APP_DIR} and created ${WORKSPACE_DIR}/${ZIP_NAME}"

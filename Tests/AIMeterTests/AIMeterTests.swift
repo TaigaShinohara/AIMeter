@@ -30,6 +30,7 @@ final class AIMeterTests: XCTestCase {
         XCTAssertEqual(UsageParser.startTimestamp(for: .monthly, now: midMonth), Int(oct1.timeIntervalSince1970))
         XCTAssertEqual(UsageParser.startTimestamp(for: .daily, now: midMonth), Int(oct19Start.timeIntervalSince1970))
         XCTAssertEqual(UsageParser.startTimestamp(for: .fiveHours, now: midMonth), Int(midMonth.timeIntervalSince1970) - 5 * 3600)
+        XCTAssertEqual(UsageParser.startTimestamp(for: .twoHours, now: midMonth), Int(midMonth.timeIntervalSince1970) - 2 * 3600)
     }
 
     func testPeriodUsageMetricCalculationAndServerRateLimitSync() {
@@ -46,9 +47,25 @@ final class AIMeterTests: XCTestCase {
         )
         XCTAssertEqual(syncedMetric.remainingPercent, 44)
         XCTAssertEqual(syncedMetric.effectiveLimitTokens, 285_714_286)
+
+        // When usedTokens is 0 but serverUsedPercent is known (e.g. GrokBot weekly cache), remainingTokens scales by ratio
+        let grokMetric = PeriodUsageMetric(
+            period: .weekly,
+            usedTokens: 0,
+            limitTokens: 10_000_000,
+            serverUsedPercent: 90.0
+        )
+        XCTAssertEqual(grokMetric.remainingPercent, 10)
+        XCTAssertEqual(grokMetric.remainingTokens, 1_000_000)
     }
 
     func testCustomSubscriptionConfigCustomizationAndPeriodToggles() throws {
+        let grok = CustomSubscriptionConfig.grokbotPreset()
+        XCTAssertTrue(grok.isPeriodEnabled(.twoHours))
+        XCTAssertTrue(grok.isPeriodEnabled(.daily))
+        XCTAssertTrue(grok.isPeriodEnabled(.weekly))
+        XCTAssertFalse(grok.isPeriodEnabled(.monthly))
+
         var sub = CustomSubscriptionConfig.claudePreset()
         XCTAssertTrue(sub.isPeriodEnabled(.fiveHours))
         XCTAssertFalse(sub.isPeriodEnabled(.daily))
@@ -58,14 +75,17 @@ final class AIMeterTests: XCTestCase {
         XCTAssertTrue(sub.isPeriodEnabled(.daily))
 
         // Should never allow disabling all periods (at least 1 remains)
+        sub.setPeriod(.twoHours, enabled: false)
         sub.setPeriod(.fiveHours, enabled: false)
         sub.setPeriod(.daily, enabled: false)
         sub.setPeriod(.weekly, enabled: false)
         sub.setPeriod(.monthly, enabled: false)
         XCTAssertEqual(sub.enabledPeriodRawValues.count, 1)
 
+        sub.limit2h = -5
         sub.limit5h = -10
         sub.sanitize()
+        XCTAssertEqual(sub.limit2h, 1)
         XCTAssertEqual(sub.limit5h, 1)
     }
 
@@ -75,6 +95,7 @@ final class AIMeterTests: XCTestCase {
           "openaiUsedTokens": 170218895,
           "openaiCostUSD": 460.66,
           "openaiUsedByPeriod": {
+            "2h": 8453202,
             "5h": 21556465,
             "1d": 40036059,
             "7d": 160952376,
@@ -96,23 +117,35 @@ final class AIMeterTests: XCTestCase {
             "30d": 2296092
           },
           "providers": {
-            "claude": {
+            "grokbot": {
               "usedByPeriod": {
-                "5h": 120000,
-                "1d": 350000,
-                "7d": 1400000,
-                "30d": 4200000
+                "2h": 0,
+                "5h": 2330,
+                "1d": 10754,
+                "7d": 58159,
+                "30d": 87440
               },
-              "costUSD": 20.0
+              "serverUsedPercentByPeriod": {
+                "7d": 90.53
+              },
+              "resetAtByPeriod": {
+                "7d": 1792468435
+              },
+              "costUSD": 75.63,
+              "status": "Grok Bot Plan"
             }
-          }
+          },
+          "detectedProviders": ["grokbot", "claude", "cursor"]
         }
         """.data(using: .utf8)!
 
         let decoded = try JSONDecoder().decode(LocalUsageData.self, from: json)
+        XCTAssertEqual(decoded.openaiUsedByPeriod?.twoHours, 8453202)
         XCTAssertEqual(decoded.openaiUsedByPeriod?.fiveHours, 21556465)
-        XCTAssertEqual(decoded.providers?["claude"]?.usedByPeriod?.fiveHours, 120000)
-        XCTAssertEqual(decoded.providers?["claude"]?.costUSD, 20.0)
+        XCTAssertEqual(decoded.providers?["grokbot"]?.serverUsedPercentByPeriod?.weekly, 90.53)
+        XCTAssertEqual(decoded.providers?["grokbot"]?.resetAtByPeriod?.weekly, 1792468435)
+        XCTAssertEqual(decoded.providers?["grokbot"]?.status, "Grok Bot Plan")
+        XCTAssertEqual(decoded.detectedProviders, ["grokbot", "claude", "cursor"])
     }
 
     func testParseOpenAIUsagePageAndPagination() throws {
@@ -179,5 +212,43 @@ final class AIMeterTests: XCTestCase {
 
         let total = try UsageParser.parseGeminiMonitoringSeries(data: sampleJSON)
         XCTAssertEqual(total, 20000)
+    }
+
+    func testLocalUsageCollectorCutoffsAndISOParsing() {
+        let fixedDate = Date(timeIntervalSince1970: 1729344000) // 2024-10-19T13:20:00Z
+        let cutoffs = LocalUsageCollector.calculateCutoffs(now: fixedDate)
+
+        XCTAssertEqual(cutoffs["2h"], fixedDate.addingTimeInterval(-2 * 3600))
+        XCTAssertEqual(cutoffs["5h"], fixedDate.addingTimeInterval(-5 * 3600))
+        XCTAssertEqual(cutoffs["1d"], fixedDate.addingTimeInterval(-24 * 3600))
+        XCTAssertEqual(cutoffs["7d"], fixedDate.addingTimeInterval(-7 * 86400))
+        XCTAssertEqual(cutoffs["30d"], fixedDate.addingTimeInterval(-30 * 86400))
+
+        let parsedStandard = LocalUsageCollector.parseISODate("2024-10-19T13:20:00Z")
+        XCTAssertNotNil(parsedStandard)
+        XCTAssertEqual(parsedStandard?.timeIntervalSince1970, 1729344000)
+
+        let parsedFractional = LocalUsageCollector.parseISODate("2024-10-19T13:20:00.500Z")
+        XCTAssertNotNil(parsedFractional)
+
+        let parsedOffset = LocalUsageCollector.parseISODate("2024-10-19T13:20:00+00:00")
+        XCTAssertNotNil(parsedOffset)
+    }
+
+    func testLocalUsageCollectorCollectAndSaveAtomically() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let targetFile = tempDir.appendingPathComponent("test_usage.json")
+        let collected = await LocalUsageCollector.collectAndSave(targetFileURL: targetFile)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: targetFile.path))
+        XCTAssertEqual(collected.source, "local_logs_native")
+        XCTAssertNotNil(collected.updatedAt)
+
+        let readBackData = try Data(contentsOf: targetFile)
+        let decoded = try JSONDecoder().decode(LocalUsageData.self, from: readBackData)
+        XCTAssertEqual(decoded.source, "local_logs_native")
     }
 }
