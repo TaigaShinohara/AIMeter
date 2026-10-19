@@ -11,7 +11,14 @@ struct SetupWizardView: View {
     @State private var activePathPickerProviderId: String? = nil
     @State private var customPathInput: String = ""
     @State private var validationResult: LocalUsageCollector.ProviderPathScanResult? = nil
-    @State private var showCustomAddSheet: Bool = false
+
+    // New custom service form states
+    @State private var showNewServiceForm: Bool = false
+    @State private var newServiceName: String = ""
+    @State private var newServiceShortName: String = ""
+    @State private var newServicePath: String = ""
+    @State private var newServiceIcon: String = "cpu.fill"
+    @State private var newServiceValidationResult: LocalUsageCollector.ProviderPathScanResult? = nil
 
     struct ServiceSetupItem: Identifiable {
         let id: String
@@ -92,10 +99,12 @@ struct SetupWizardView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("AIサービスの確認・初期セットアップ")
                         .font(.system(size: 14, weight: .bold))
-                    Text("このMac内で見つかったAIツールです。表示したいサービスを確認・選択してください。")
+                    Text("表示したいサービスの選択や、新規サービスの追加・パス指定を行えます。")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
+
+                Spacer()
 
                 if let onOpenHelp {
                     Button {
@@ -136,21 +145,27 @@ struct SetupWizardView: View {
 
             Divider()
 
-            // Service List
+            // Service List & Add Service Section
             ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(standardServices) { service in
-                        serviceRowView(service: service)
+                VStack(spacing: 10) {
+                    // Standard Detected / Configured Services
+                    VStack(spacing: 8) {
+                        ForEach(standardServices) { service in
+                            serviceRowView(service: service)
+                        }
+
+                        // Extra custom user subscriptions that aren't in standardServices
+                        ForEach(extraCustomSubscriptions) { sub in
+                            extraSubscriptionRowView(sub: sub)
+                        }
                     }
 
-                    // Extra custom user subscriptions that aren't in standardServices
-                    ForEach(extraCustomSubscriptions) { sub in
-                        extraSubscriptionRowView(sub: sub)
-                    }
+                    // Add New Service Section
+                    addServiceSectionView
                 }
                 .padding(.trailing, 4)
             }
-            .frame(maxHeight: 280)
+            .frame(maxHeight: 330)
 
             Divider()
 
@@ -172,7 +187,7 @@ struct SetupWizardView: View {
             }
         }
         .padding(16)
-        .frame(width: 440)
+        .frame(width: 450)
         .onAppear {
             if monitor.customSubscriptions.isEmpty {
                 monitor.autoAddDetectedSubscriptions()
@@ -269,42 +284,257 @@ struct SetupWizardView: View {
     // MARK: - Row View for Extra Custom Subscriptions
     @ViewBuilder
     private func extraSubscriptionRowView(sub: CustomSubscriptionConfig) -> some View {
-        HStack(spacing: 10) {
-            Toggle("", isOn: Binding(
-                get: { sub.isEnabled },
-                set: { val in
-                    if let idx = monitor.customSubscriptions.firstIndex(where: { $0.id == sub.id }) {
-                        monitor.customSubscriptions[idx].isEnabled = val
+        let customPath = monitor.customProviderPaths[sub.id]
+        let isExpanded = activePathPickerProviderId == sub.id
+
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Toggle("", isOn: Binding(
+                    get: { sub.isEnabled },
+                    set: { val in
+                        if let idx = monitor.customSubscriptions.firstIndex(where: { $0.id == sub.id }) {
+                            monitor.customSubscriptions[idx].isEnabled = val
+                        }
+                    }
+                ))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
+
+                Image(systemName: sub.iconName)
+                    .font(.system(size: 13))
+                    .frame(width: 18)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(sub.name)
+                            .font(.system(size: 12, weight: .semibold))
+
+                        if customPath != nil {
+                            badgeView(text: "手動指定", color: .blue)
+                        } else {
+                            badgeView(text: "カスタム", color: .purple)
+                        }
+                    }
+
+                    if let usage = monitor.customProviderLiveUsage[sub.id], let monthly = usage.usedByPeriod?.monthly, monthly > 0 {
+                        Text("実ログ: \(formatTokenCount(monthly)) (\(usage.status ?? sub.statusNote))")
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundStyle(Color.primary.opacity(0.8))
+                    } else if !sub.statusNote.isEmpty {
+                        Text(sub.statusNote)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
                     }
                 }
-            ))
-            .labelsHidden()
-            .toggleStyle(.checkbox)
-            .controlSize(.small)
 
-            Image(systemName: sub.iconName)
-                .font(.system(size: 13))
-                .frame(width: 18)
+                Spacer()
 
-            Text(sub.name)
-                .font(.system(size: 12, weight: .semibold))
+                Button {
+                    if isExpanded {
+                        activePathPickerProviderId = nil
+                        validationResult = nil
+                    } else {
+                        activePathPickerProviderId = sub.id
+                        customPathInput = monitor.customProviderPaths[sub.id] ?? ""
+                        validationResult = nil
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: customPath != nil ? "folder.fill" : "folder.badge.gearshape")
+                        Text(customPath != nil ? "パス変更" : "パス指定")
+                    }
+                    .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.mini)
+                .foregroundStyle(customPath != nil ? Color.blue : Color.secondary)
 
-            Spacer()
-
-            Button {
-                monitor.removeSubscription(id: sub.id)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                Button {
+                    monitor.removeSubscription(id: sub.id)
+                    monitor.setCustomPath(for: sub.id, path: "")
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+
+            if isExpanded {
+                pathEditorView(serviceId: sub.id, defaultHint: "~/path/to/logs")
+            }
         }
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.03))
+                .fill(sub.isEnabled ? Color.primary.opacity(0.04) : Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                )
         )
+    }
+
+    // MARK: - Add New Service Section
+    @ViewBuilder
+    private var addServiceSectionView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("+ サービスを追加")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            // Preset Quick-add Buttons
+            HStack(spacing: 4) {
+                Button("+ Devin") { monitor.addSubscription(.devinPreset()) }
+                Button("+ Perplexity") { monitor.addSubscription(.perplexityPreset()) }
+                Button("+ DeepSeek") { monitor.addSubscription(.deepseekPreset()) }
+                Button("+ Poe") { monitor.addSubscription(.poePreset()) }
+                Button("+ Trae") { monitor.addSubscription(.traePreset()) }
+            }
+            .controlSize(.mini)
+
+            // Custom New Service Toggle
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    showNewServiceForm.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: showNewServiceForm ? "chevron.up.circle.fill" : "plus.circle.fill")
+                        .foregroundStyle(.tint)
+                    Text(showNewServiceForm ? "カスタム作成を閉じる" : "新規カスタムAIを手動作成...")
+                        .font(.system(size: 11, weight: .medium))
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+
+            if showNewServiceForm {
+                newCustomServiceFormView
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.02))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                )
+        )
+    }
+
+    // MARK: - New Custom Service Form
+    @ViewBuilder
+    private var newCustomServiceFormView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+
+            HStack(spacing: 6) {
+                TextField("サービス名 (例: Local Ollama)", text: $newServiceName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+
+                TextField("略称 (例: Oll)", text: $newServiceShortName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 80)
+            }
+
+            // Log Path with Browse Button
+            HStack(spacing: 5) {
+                TextField("ログファイル / 保存先ディレクトリ (任意)", text: $newServicePath)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 10))
+
+                Button("参照...") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = true
+                    panel.canChooseDirectories = true
+                    panel.allowsMultipleSelection = false
+                    panel.prompt = "選択"
+                    panel.message = "ログファイルまたはディレクトリを選択してください"
+
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    if panel.runModal() == .OK, let url = panel.url {
+                        newServicePath = url.path
+                    }
+                }
+                .controlSize(.mini)
+            }
+
+            HStack {
+                Spacer()
+
+                Button("キャンセル") {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showNewServiceForm = false
+                        newServiceName = ""
+                        newServiceShortName = ""
+                        newServicePath = ""
+                    }
+                }
+                .controlSize(.small)
+
+                Button("サービスを追加") {
+                    let name = newServiceName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !name.isEmpty else { return }
+
+                    let shortId = String(UUID().uuidString.prefix(6)).lowercased()
+                    let customId = "custom_\(shortId)"
+                    let shortName = newServiceShortName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? String(name.prefix(4))
+                        : newServiceShortName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    let newConfig = CustomSubscriptionConfig(
+                        id: customId,
+                        name: name,
+                        shortName: shortName,
+                        iconName: "cpu.fill",
+                        isEnabled: true,
+                        showInMenuBar: true,
+                        enabledPeriodRawValues: ["5h", "1d", "7d", "30d"],
+                        limit2h: 200_000,
+                        limit5h: 500_000,
+                        limitDaily: 2_000_000,
+                        limitWeekly: 10_000_000,
+                        limitMonthly: 30_000_000,
+                        manualUsed2h: 0,
+                        manualUsed5h: 0,
+                        manualUsedDaily: 0,
+                        manualUsedWeekly: 0,
+                        manualUsedMonthly: 0,
+                        usedCostUSD: 0.0,
+                        budgetUSD: 20.0,
+                        statusNote: "カスタム"
+                    )
+
+                    monitor.addSubscription(newConfig)
+
+                    let trimmedPath = newServicePath.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmedPath.isEmpty {
+                        monitor.setCustomPath(for: customId, path: trimmedPath)
+                    }
+
+                    // Reset and hide form
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showNewServiceForm = false
+                        newServiceName = ""
+                        newServiceShortName = ""
+                        newServicePath = ""
+                    }
+
+                    Task {
+                        await monitor.refresh()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(newServiceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(.top, 4)
     }
 
     // MARK: - Path Editor View
