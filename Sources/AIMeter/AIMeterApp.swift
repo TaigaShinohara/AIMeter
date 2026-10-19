@@ -65,6 +65,177 @@ struct PeriodUsageMetric: Equatable, Identifiable {
     }
 }
 
+// MARK: - Custom Subscription / Provider Configuration
+struct CustomSubscriptionConfig: Codable, Identifiable, Equatable {
+    var id: String
+    var name: String
+    var shortName: String
+    var iconName: String
+    var isEnabled: Bool
+    var showInMenuBar: Bool
+    var enabledPeriodRawValues: [String]
+
+    var limit5h: Int
+    var limitDaily: Int
+    var limitWeekly: Int
+    var limitMonthly: Int
+
+    var manualUsed5h: Int
+    var manualUsedDaily: Int
+    var manualUsedWeekly: Int
+    var manualUsedMonthly: Int
+
+    var usedCostUSD: Double
+    var budgetUSD: Double
+    var statusNote: String
+
+    func isPeriodEnabled(_ period: LimitPeriod) -> Bool {
+        enabledPeriodRawValues.contains(period.rawValue)
+    }
+
+    mutating func setPeriod(_ period: LimitPeriod, enabled: Bool) {
+        if enabled {
+            if !enabledPeriodRawValues.contains(period.rawValue) {
+                enabledPeriodRawValues.append(period.rawValue)
+            }
+        } else if enabledPeriodRawValues.count > 1 {
+            enabledPeriodRawValues.removeAll { $0 == period.rawValue }
+        }
+    }
+
+    mutating func sanitize() {
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { name = "Custom AI" }
+        if shortName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { shortName = "AI" }
+        if enabledPeriodRawValues.isEmpty { enabledPeriodRawValues = [LimitPeriod.monthly.rawValue] }
+        if limit5h < 1 { limit5h = 1 }
+        if limitDaily < 1 { limitDaily = 1 }
+        if limitWeekly < 1 { limitWeekly = 1 }
+        if limitMonthly < 1 { limitMonthly = 1 }
+        if manualUsed5h < 0 { manualUsed5h = 0 }
+        if manualUsedDaily < 0 { manualUsedDaily = 0 }
+        if manualUsedWeekly < 0 { manualUsedWeekly = 0 }
+        if manualUsedMonthly < 0 { manualUsedMonthly = 0 }
+        if usedCostUSD < 0 { usedCostUSD = 0 }
+        if budgetUSD < 0 { budgetUSD = 0 }
+    }
+
+    static func claudePreset() -> CustomSubscriptionConfig {
+        CustomSubscriptionConfig(
+            id: "claude",
+            name: "Anthropic Claude",
+            shortName: "Cld",
+            iconName: "brain.head.profile",
+            isEnabled: true,
+            showInMenuBar: true,
+            enabledPeriodRawValues: ["5h", "7d", "30d"],
+            limit5h: 1_500_000,
+            limitDaily: 4_000_000,
+            limitWeekly: 15_000_000,
+            limitMonthly: 45_000_000,
+            manualUsed5h: 0,
+            manualUsedDaily: 0,
+            manualUsedWeekly: 0,
+            manualUsedMonthly: 0,
+            usedCostUSD: 20.0,
+            budgetUSD: 20.0,
+            statusNote: "Pro/Max"
+        )
+    }
+
+    static func cursorPreset() -> CustomSubscriptionConfig {
+        CustomSubscriptionConfig(
+            id: "cursor",
+            name: "Cursor Pro",
+            shortName: "Cur",
+            iconName: "terminal.fill",
+            isEnabled: true,
+            showInMenuBar: false,
+            enabledPeriodRawValues: ["1d", "30d"],
+            limit5h: 100,
+            limitDaily: 50,
+            limitWeekly: 200,
+            limitMonthly: 500,
+            manualUsed5h: 0,
+            manualUsedDaily: 12,
+            manualUsedWeekly: 60,
+            manualUsedMonthly: 145,
+            usedCostUSD: 20.0,
+            budgetUSD: 20.0,
+            statusNote: "Fast Reqs"
+        )
+    }
+
+    static func copilotPreset() -> CustomSubscriptionConfig {
+        CustomSubscriptionConfig(
+            id: "copilot",
+            name: "GitHub Copilot",
+            shortName: "Cop",
+            iconName: "chevron.left.forwardslash.chevron.right",
+            isEnabled: true,
+            showInMenuBar: false,
+            enabledPeriodRawValues: ["30d"],
+            limit5h: 100,
+            limitDaily: 100,
+            limitWeekly: 150,
+            limitMonthly: 300,
+            manualUsed5h: 0,
+            manualUsedDaily: 5,
+            manualUsedWeekly: 25,
+            manualUsedMonthly: 80,
+            usedCostUSD: 10.0,
+            budgetUSD: 10.0,
+            statusNote: "Premium"
+        )
+    }
+
+    static func perplexityPreset() -> CustomSubscriptionConfig {
+        CustomSubscriptionConfig(
+            id: "perplexity",
+            name: "Perplexity Pro",
+            shortName: "Pplx",
+            iconName: "globe",
+            isEnabled: true,
+            showInMenuBar: false,
+            enabledPeriodRawValues: ["1d", "30d"],
+            limit5h: 100,
+            limitDaily: 300,
+            limitWeekly: 1_500,
+            limitMonthly: 6_000,
+            manualUsed5h: 0,
+            manualUsedDaily: 25,
+            manualUsedWeekly: 120,
+            manualUsedMonthly: 450,
+            usedCostUSD: 20.0,
+            budgetUSD: 20.0,
+            statusNote: "Pro"
+        )
+    }
+
+    static func blankCustom() -> CustomSubscriptionConfig {
+        let shortId = String(UUID().uuidString.prefix(6)).lowercased()
+        return CustomSubscriptionConfig(
+            id: "custom_\(shortId)",
+            name: "新規サービス",
+            shortName: "Sub",
+            iconName: "cpu.fill",
+            isEnabled: true,
+            showInMenuBar: false,
+            enabledPeriodRawValues: ["5h", "1d", "7d", "30d"],
+            limit5h: 500_000,
+            limitDaily: 2_000_000,
+            limitWeekly: 10_000_000,
+            limitMonthly: 30_000_000,
+            manualUsed5h: 0,
+            manualUsedDaily: 0,
+            manualUsedWeekly: 0,
+            manualUsedMonthly: 0,
+            usedCostUSD: 20.0,
+            budgetUSD: 20.0,
+            statusNote: ""
+        )
+    }
+}
+
 // MARK: - Local JSON Model
 struct ProviderPeriodUsageJSON: Codable, Equatable {
     var fiveHours: Int?
@@ -94,6 +265,14 @@ struct ProviderPeriodPercentJSON: Codable, Equatable {
     }
 }
 
+struct CustomProviderUsageJSON: Codable, Equatable {
+    var usedByPeriod: ProviderPeriodUsageJSON?
+    var serverUsedPercentByPeriod: ProviderPeriodPercentJSON?
+    var resetAtByPeriod: ProviderPeriodUsageJSON?
+    var costUSD: Double?
+    var status: String?
+}
+
 struct LocalUsageData: Codable, Equatable {
     var openaiUsedTokens: Int?
     var openaiCostUSD: Double?
@@ -107,6 +286,8 @@ struct LocalUsageData: Codable, Equatable {
     var openaiResetAtByPeriod: ProviderPeriodUsageJSON?
     var openaiPlanType: String?
     var openaiCreditBalance: Double?
+
+    var providers: [String: CustomProviderUsageJSON]?
     var source: String?
     var updatedAt: String?
 }
@@ -292,20 +473,35 @@ final class UsageMonitor: ObservableObject {
         }
     }
 
-    // OpenAI Token Limits per Period (calibrated for real Codex/OpenAI usage)
+    // Built-in Provider Visibility & Period Toggles
+    @AppStorage("showOpenAISection") var showOpenAISection: Bool = true
+    @AppStorage("showGeminiSection") var showGeminiSection: Bool = true
+    @AppStorage("openaiEnabledPeriodsCSV") var openaiEnabledPeriodsCSV: String = "5h,1d,7d,30d"
+    @AppStorage("geminiEnabledPeriodsCSV") var geminiEnabledPeriodsCSV: String = "5h,1d,7d,30d"
+
+    // OpenAI Token Limits per Period
     @AppStorage("openaiTokenLimit5h") var openaiTokenLimit5h: Int = 40_000_000
     @AppStorage("openaiTokenLimitDaily") var openaiTokenLimitDaily: Int = 80_000_000
     @AppStorage("openaiTokenLimitWeekly") var openaiTokenLimitWeekly: Int = 290_000_000
     @AppStorage("openaiTokenLimit") var openaiTokenLimit: Int = 800_000_000
     @AppStorage("openaiBudgetUSD") var openaiBudgetUSD: Double = 600.0
 
-    // Gemini Token Limits per Period (calibrated for real Antigravity/Gemini usage)
+    // Gemini Token Limits per Period
     @AppStorage("gcpProjectId") var gcpProjectId: String = ""
     @AppStorage("geminiTokenLimit5h") var geminiTokenLimit5h: Int = 1_500_000
     @AppStorage("geminiTokenLimitDaily") var geminiTokenLimitDaily: Int = 4_000_000
     @AppStorage("geminiTokenLimitWeekly") var geminiTokenLimitWeekly: Int = 15_000_000
     @AppStorage("geminiTokenLimit") var geminiTokenLimit: Int = 40_000_000
     @AppStorage("geminiBudgetUSD") var geminiBudgetUSD: Double = 20.0
+
+    // Custom Subscriptions JSON persistence
+    @AppStorage("customSubscriptionsJSON") var customSubscriptionsJSON: String = "[]"
+    @Published var customSubscriptions: [CustomSubscriptionConfig] = [] {
+        didSet {
+            saveCustomSubscriptions()
+        }
+    }
+    @Published var customProviderLiveUsage: [String: CustomProviderUsageJSON] = [:]
 
     // MenuBar Display Period Mode ("min" = bottleneck or LimitPeriod.rawValue)
     @AppStorage("menuBarPeriodMode") var menuBarPeriodMode: String = "min"
@@ -314,19 +510,19 @@ final class UsageMonitor: ObservableObject {
     @Published var openaiUsed5h: Int = 0
     @Published var openaiUsedDaily: Int = 0
     @Published var openaiUsedWeekly: Int = 0
-    @Published var openaiUsedTokens: Int = 0 // Monthly
+    @Published var openaiUsedTokens: Int = 0
     @Published var openaiServerPct: ProviderPeriodPercentJSON? = nil
     @Published var openaiResetAt: ProviderPeriodUsageJSON? = nil
     @Published var openaiCostUSD: Double = 0.0
-    @Published var openaiStatus: String = "実ログ集計中"
+    @Published var openaiStatus: String = "実ログ"
 
     // Gemini Used Tokens per Period
     @Published var geminiUsed5h: Int = 0
     @Published var geminiUsedDaily: Int = 0
     @Published var geminiUsedWeekly: Int = 0
-    @Published var geminiUsedTokens: Int = 0 // Monthly
+    @Published var geminiUsedTokens: Int = 0
     @Published var geminiCostUSD: Double = 0.0
-    @Published var geminiStatus: String = "実ログ集計中"
+    @Published var geminiStatus: String = "実ログ"
 
     @Published var lastUpdated: Date = Date()
     @Published var isRefreshing: Bool = false
@@ -334,6 +530,7 @@ final class UsageMonitor: ObservableObject {
     private var timer: Timer?
     private var wakeObserver: NSObjectProtocol?
     private let urlSession: URLSession
+    private var isLoadingSubscriptions: Bool = false
 
     init() {
         let config = URLSessionConfiguration.ephemeral
@@ -353,7 +550,6 @@ final class UsageMonitor: ObservableObject {
             legacyOpenaiAdminKey = ""
         }
 
-        // One-time upgrade from initial mock defaults to real-usage scale
         if !didCalibrateRealLimitsV1 {
             if openaiTokenLimit == 5_000_000 { openaiTokenLimit = 800_000_000 }
             if openaiTokenLimitWeekly == 2_000_000 { openaiTokenLimitWeekly = 290_000_000 }
@@ -369,6 +565,7 @@ final class UsageMonitor: ObservableObject {
             didCalibrateRealLimitsV1 = true
         }
 
+        loadCustomSubscriptions()
         sanitizeSettings()
 
         Task {
@@ -396,6 +593,62 @@ final class UsageMonitor: ObservableObject {
         }
     }
 
+    private func loadCustomSubscriptions() {
+        isLoadingSubscriptions = true
+        defer { isLoadingSubscriptions = false }
+        guard let data = customSubscriptionsJSON.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([CustomSubscriptionConfig].self, from: data) else {
+            customSubscriptions = []
+            return
+        }
+        customSubscriptions = decoded
+    }
+
+    private func saveCustomSubscriptions() {
+        guard !isLoadingSubscriptions else { return }
+        if let data = try? JSONEncoder().encode(customSubscriptions),
+           let str = String(data: data, encoding: .utf8) {
+            customSubscriptionsJSON = str
+        }
+    }
+
+    func addSubscription(_ preset: CustomSubscriptionConfig) {
+        var newSub = preset
+        if customSubscriptions.contains(where: { $0.id == newSub.id }) {
+            let suffix = String(UUID().uuidString.prefix(4)).lowercased()
+            newSub.id = "\(newSub.id)_\(suffix)"
+        }
+        newSub.sanitize()
+        customSubscriptions.append(newSub)
+    }
+
+    func removeSubscription(id: String) {
+        customSubscriptions.removeAll { $0.id == id }
+    }
+
+    func isBuiltInPeriodEnabled(csv: String, period: LimitPeriod) -> Bool {
+        let parts = csv.split(separator: ",").map(String.init)
+        return parts.contains(period.rawValue)
+    }
+
+    func setBuiltInPeriod(isOpenAI: Bool, period: LimitPeriod, enabled: Bool) {
+        let currentCSV = isOpenAI ? openaiEnabledPeriodsCSV : geminiEnabledPeriodsCSV
+        var parts = currentCSV.split(separator: ",").map(String.init)
+        if enabled {
+            if !parts.contains(period.rawValue) {
+                parts.append(period.rawValue)
+            }
+        } else if parts.count > 1 {
+            parts.removeAll { $0 == period.rawValue }
+        }
+        let ordered = LimitPeriod.allCases.map(\.rawValue).filter { parts.contains($0) }.joined(separator: ",")
+        if isOpenAI {
+            openaiEnabledPeriodsCSV = ordered.isEmpty ? "30d" : ordered
+        } else {
+            geminiEnabledPeriodsCSV = ordered.isEmpty ? "30d" : ordered
+        }
+    }
+
     func sanitizeSettings() {
         if openaiTokenLimit5h < 1 { openaiTokenLimit5h = 1 }
         if openaiTokenLimitDaily < 1 { openaiTokenLimitDaily = 1 }
@@ -408,10 +661,14 @@ final class UsageMonitor: ObservableObject {
         if geminiTokenLimitWeekly < 1 { geminiTokenLimitWeekly = 1 }
         if geminiTokenLimit < 1 { geminiTokenLimit = 1 }
         if geminiBudgetUSD < 0 { geminiBudgetUSD = 0 }
+
+        for idx in customSubscriptions.indices {
+            customSubscriptions[idx].sanitize()
+        }
     }
 
     var openaiMetrics: [PeriodUsageMetric] {
-        [
+        let all = [
             PeriodUsageMetric(
                 period: .fiveHours,
                 usedTokens: openaiUsed5h,
@@ -441,37 +698,77 @@ final class UsageMonitor: ObservableObject {
                 resetTimestamp: openaiResetAt?.monthly
             )
         ]
+        let filtered = all.filter { isBuiltInPeriodEnabled(csv: openaiEnabledPeriodsCSV, period: $0.period) }
+        return filtered.isEmpty ? all : filtered
     }
 
     var geminiMetrics: [PeriodUsageMetric] {
-        [
+        let all = [
             PeriodUsageMetric(period: .fiveHours, usedTokens: geminiUsed5h, limitTokens: geminiTokenLimit5h),
             PeriodUsageMetric(period: .daily, usedTokens: geminiUsedDaily, limitTokens: geminiTokenLimitDaily),
             PeriodUsageMetric(period: .weekly, usedTokens: geminiUsedWeekly, limitTokens: geminiTokenLimitWeekly),
             PeriodUsageMetric(period: .monthly, usedTokens: geminiUsedTokens, limitTokens: geminiTokenLimit)
         ]
+        let filtered = all.filter { isBuiltInPeriodEnabled(csv: geminiEnabledPeriodsCSV, period: $0.period) }
+        return filtered.isEmpty ? all : filtered
     }
 
-    var openaiRemainingTokens: Int {
-        max(0, openaiTokenLimit - openaiUsedTokens)
+    func metrics(for sub: CustomSubscriptionConfig) -> [PeriodUsageMetric] {
+        let live = customProviderLiveUsage[sub.id]
+        let u5h = max(sub.manualUsed5h, live?.usedByPeriod?.fiveHours ?? 0)
+        let u1d = max(sub.manualUsedDaily, live?.usedByPeriod?.daily ?? 0)
+        let u7d = max(sub.manualUsedWeekly, live?.usedByPeriod?.weekly ?? 0)
+        let u30d = max(sub.manualUsedMonthly, live?.usedByPeriod?.monthly ?? 0)
+
+        let all = [
+            PeriodUsageMetric(
+                period: .fiveHours,
+                usedTokens: u5h,
+                limitTokens: sub.limit5h,
+                serverUsedPercent: live?.serverUsedPercentByPeriod?.fiveHours,
+                resetTimestamp: live?.resetAtByPeriod?.fiveHours
+            ),
+            PeriodUsageMetric(
+                period: .daily,
+                usedTokens: u1d,
+                limitTokens: sub.limitDaily,
+                serverUsedPercent: live?.serverUsedPercentByPeriod?.daily,
+                resetTimestamp: live?.resetAtByPeriod?.daily
+            ),
+            PeriodUsageMetric(
+                period: .weekly,
+                usedTokens: u7d,
+                limitTokens: sub.limitWeekly,
+                serverUsedPercent: live?.serverUsedPercentByPeriod?.weekly,
+                resetTimestamp: live?.resetAtByPeriod?.weekly
+            ),
+            PeriodUsageMetric(
+                period: .monthly,
+                usedTokens: u30d,
+                limitTokens: sub.limitMonthly,
+                serverUsedPercent: live?.serverUsedPercentByPeriod?.monthly,
+                resetTimestamp: live?.resetAtByPeriod?.monthly
+            )
+        ]
+        let filtered = all.filter { sub.isPeriodEnabled($0.period) }
+        return filtered.isEmpty ? [all.last!] : filtered
     }
 
-    var openaiRemainingRatio: Double {
-        guard openaiTokenLimit > 0 else { return 0 }
-        return min(1.0, max(0.0, Double(openaiRemainingTokens) / Double(openaiTokenLimit)))
-    }
-
-    var geminiRemainingTokens: Int {
-        max(0, geminiTokenLimit - geminiUsedTokens)
-    }
-
-    var geminiRemainingRatio: Double {
-        guard geminiTokenLimit > 0 else { return 0 }
-        return min(1.0, max(0.0, Double(geminiRemainingTokens) / Double(geminiTokenLimit)))
+    func effectiveCostUSD(for sub: CustomSubscriptionConfig) -> Double {
+        if let liveCost = customProviderLiveUsage[sub.id]?.costUSD, liveCost > 0 {
+            return max(sub.usedCostUSD, liveCost)
+        }
+        return sub.usedCostUSD
     }
 
     var totalCostUSD: Double {
-        openaiCostUSD + geminiCostUSD
+        var sum = 0.0
+        if showOpenAISection { sum += openaiCostUSD }
+        if showGeminiSection { sum += geminiCostUSD }
+        for sub in customSubscriptions where sub.isEnabled {
+            sum += effectiveCostUSD(for: sub)
+        }
+        return sum
     }
 
     func activeRatio(for metrics: [PeriodUsageMetric]) -> Double {
@@ -482,21 +779,27 @@ final class UsageMonitor: ObservableObject {
            let matched = metrics.first(where: { $0.period == period }) {
             return matched.remainingRatio
         }
-        return metrics.last?.remainingRatio ?? 0.0
+        return metrics.map(\.remainingRatio).min() ?? (metrics.last?.remainingRatio ?? 0.0)
     }
 
     var menuBarTitle: String {
-        let gptPct = Int((activeRatio(for: openaiMetrics) * 100).rounded())
-        let gemPct = Int((activeRatio(for: geminiMetrics) * 100).rounded())
-        let suffix: String
-        if menuBarPeriodMode == "min" {
-            suffix = "min"
-        } else if let period = LimitPeriod(rawValue: menuBarPeriodMode) {
-            suffix = period.shortLabel
-        } else {
-            suffix = "1m"
+        var segments: [String] = []
+        if showOpenAISection {
+            let gptPct = Int((activeRatio(for: openaiMetrics) * 100).rounded())
+            segments.append("GPT:\(gptPct)%")
         }
-        return String(format: "GPT:%d%% Gem:%d%% (%@)", gptPct, gemPct, suffix)
+        if showGeminiSection {
+            let gemPct = Int((activeRatio(for: geminiMetrics) * 100).rounded())
+            segments.append("Gem:\(gemPct)%")
+        }
+        for sub in customSubscriptions where sub.isEnabled && sub.showInMenuBar {
+            let pct = Int((activeRatio(for: metrics(for: sub)) * 100).rounded())
+            segments.append("\(sub.shortName):\(pct)%")
+        }
+        if segments.isEmpty {
+            return "AIMeter"
+        }
+        return segments.joined(separator: " ")
     }
 
     func refresh() async {
@@ -508,10 +811,8 @@ final class UsageMonitor: ObservableObject {
             isRefreshing = false
         }
 
-        // 0. Automatically run local log collector script to update ~/.ai_meter_usage.json from ~/.codex and ~/.gemini
         await runLocalCollectorScript()
 
-        // 1. Load local JSON
         let localData = loadLocalJSON()
         if let localData {
             let monthlyOpenAI = max(0, localData.openaiUsedByPeriod?.monthly ?? localData.openaiUsedTokens ?? 0)
@@ -530,12 +831,14 @@ final class UsageMonitor: ObservableObject {
             geminiUsed5h = max(0, localData.geminiUsedByPeriod?.fiveHours ?? min(geminiUsedDaily, Int(Double(monthlyGemini) * 0.04)))
             geminiCostUSD = max(0.0, localData.geminiCostUSD ?? 0.0)
 
+            customProviderLiveUsage = localData.providers ?? [:]
+
             if let plan = localData.openaiPlanType, !plan.isEmpty {
-                openaiStatus = "Codex (\(plan)) 実ログ"
+                openaiStatus = plan
             } else {
-                openaiStatus = "ローカル実ログ"
+                openaiStatus = "実ログ"
             }
-            geminiStatus = "Antigravity/CLI実ログ"
+            geminiStatus = "実ログ"
         } else {
             openaiUsed5h = 0
             openaiUsedDaily = 0
@@ -550,18 +853,17 @@ final class UsageMonitor: ObservableObject {
             geminiUsedWeekly = 0
             geminiUsedTokens = 0
             geminiCostUSD = 0.0
+            customProviderLiveUsage = [:]
 
-            openaiStatus = "未設定 (JSONなし)"
-            geminiStatus = "未設定 (JSONなし)"
+            openaiStatus = "未取得"
+            geminiStatus = "未取得"
         }
 
-        // 2. Fetch OpenAI API if openaiAdminKey is provided
         let trimmedOpenAIKey = openaiAdminKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedOpenAIKey.isEmpty {
             await fetchOpenAIUsage(apiKey: trimmedOpenAIKey)
         }
 
-        // 3. Fetch Gemini Cloud Monitoring API if gcpProjectId is provided
         let trimmedProjectId = gcpProjectId.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedProjectId.isEmpty {
             await fetchGeminiUsage(projectId: trimmedProjectId)
@@ -661,9 +963,9 @@ final class UsageMonitor: ObservableObject {
             if let totalCost = try? await fetchPaginatedOpenAICosts(apiKey: apiKey, startTime: monthStart) {
                 self.openaiCostUSD = totalCost
             }
-            openaiStatus = "OpenAI API連携中"
+            openaiStatus = "API"
         } catch {
-            openaiStatus = "API失敗 (実ログ維持)"
+            // Keep local log status
         }
     }
 
@@ -744,7 +1046,6 @@ final class UsageMonitor: ObservableObject {
 
     private func fetchGeminiUsage(projectId: String) async {
         guard let token = await fetchGcloudAccessToken() else {
-            geminiStatus = "gcloud未認証 (実ログ参照)"
             return
         }
 
@@ -780,7 +1081,7 @@ final class UsageMonitor: ObservableObject {
                     self.geminiUsed5h = h
                 }
 
-                geminiStatus = "GCPトークン連携中"
+                geminiStatus = "GCP"
                 return
             }
 
@@ -792,12 +1093,10 @@ final class UsageMonitor: ObservableObject {
                 endStr: endStr
             )
             if reqCount > 0 {
-                geminiStatus = "GCP (\(reqCount) reqs / 実ログ併用)"
-            } else {
-                geminiStatus = "GCP連携済 (実ログ併用)"
+                geminiStatus = "GCP (\(reqCount) reqs)"
             }
         } catch {
-            geminiStatus = "Cloud API未取得 (実ログ維持)"
+            // Keep local log status
         }
     }
 
@@ -893,6 +1192,20 @@ func formatTokenCount(_ count: Int) -> String {
     if count >= 1_000_000 {
         return String(format: "%.2fM", Double(count) / 1_000_000.0)
     } else if count >= 1_000 {
+        return String(format: "%.1fK", Double(count) / 1_000_000.0 * 1_000.0)
+    } else {
+        return "\(max(0, count))"
+    }
+}
+
+func formatCompactTokenCount(_ count: Int) -> String {
+    if count >= 100_000_000 {
+        return String(format: "%.0fM", Double(count) / 1_000_000.0)
+    } else if count >= 1_000_000 {
+        return String(format: "%.1fM", Double(count) / 1_000_000.0)
+    } else if count >= 10_000 {
+        return String(format: "%.0fK", Double(count) / 1_000.0)
+    } else if count >= 1_000 {
         return String(format: "%.1fK", Double(count) / 1_000.0)
     } else {
         return "\(max(0, count))"
@@ -913,7 +1226,17 @@ func gaugeColor(for remainingRatio: Double) -> Color {
     } else if remainingRatio < 0.35 {
         return .orange
     } else {
-        return .green
+        return Color.primary.opacity(0.68)
+    }
+}
+
+func percentageTextColor(for remainingRatio: Double) -> Color {
+    if remainingRatio < 0.15 {
+        return .red
+    } else if remainingRatio < 0.35 {
+        return .orange
+    } else {
+        return .primary
     }
 }
 
@@ -927,7 +1250,7 @@ func gaugeWarningSymbol(for remainingRatio: Double) -> String? {
     }
 }
 
-// MARK: - Single Period Limit Row View
+// MARK: - Single Period Limit Row View (Clean Tabular Design)
 struct PeriodLimitRowView: View {
     let metric: PeriodUsageMetric
     let isHighlighted: Bool
@@ -936,100 +1259,102 @@ struct PeriodLimitRowView: View {
         let ratio = metric.remainingRatio
         let pct = metric.remainingPercent
 
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 4) {
-                HStack(spacing: 2) {
-                    Text(metric.period.label)
-                        .font(.system(size: 10, weight: isHighlighted ? .bold : .semibold))
-                        .foregroundStyle(isHighlighted ? .primary : .secondary)
-                    if metric.serverUsedPercent != nil {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.cyan)
-                            .help("サーバー公式レート制限値と同期済み")
-                    }
-                }
-                .frame(width: 44, alignment: .leading)
+        HStack(spacing: 8) {
+            // 1. Period Label
+            Text(metric.period.label)
+                .font(.system(size: 11, weight: isHighlighted ? .semibold : .regular))
+                .foregroundStyle(isHighlighted ? .primary : .secondary)
+                .frame(width: 38, alignment: .leading)
 
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.12))
-                            .frame(height: 6)
-                        Capsule()
-                            .fill(gaugeColor(for: ratio))
-                            .frame(width: max(3, geo.size.width * ratio), height: 6)
-                            .animation(.easeInOut(duration: 0.25), value: ratio)
-                    }
+            // 2. Clean Progress Bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(height: 5)
+                    Capsule()
+                        .fill(gaugeColor(for: ratio))
+                        .frame(width: max(3, geo.size.width * ratio), height: 5)
+                        .animation(.easeInOut(duration: 0.2), value: ratio)
                 }
-                .frame(height: 6)
-
-                HStack(spacing: 2) {
-                    if let warningSymbol = gaugeWarningSymbol(for: ratio) {
-                        Image(systemName: warningSymbol)
-                            .font(.system(size: 9))
-                            .foregroundStyle(gaugeColor(for: ratio))
-                    }
-                    Text("\(formatTokenCount(metric.remainingTokens))/\(formatTokenCount(metric.effectiveLimitTokens))")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Text(String(format: "%3d%%", pct))
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(gaugeColor(for: ratio))
-                        .frame(width: 32, alignment: .trailing)
-                }
+                .frame(maxHeight: .infinity, alignment: .center)
             }
+            .frame(height: 14)
 
-            if let resetStr = formatResetTimestamp(metric.resetTimestamp) {
-                HStack {
-                    Spacer()
-                    Text("リセット: \(resetStr)")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.secondary.opacity(0.85))
-                }
-            }
+            // 3. Remaining Amount (or Reset Time hint)
+            Text("残 \(formatCompactTokenCount(metric.remainingTokens))")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 60, alignment: .trailing)
+
+            // 4. Remaining Percentage
+            Text("\(pct)%")
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundStyle(percentageTextColor(for: ratio))
+                .frame(width: 38, alignment: .trailing)
         }
         .padding(.vertical, 2)
-        .padding(.horizontal, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(isHighlighted ? Color.primary.opacity(0.06) : Color.clear)
-        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(metric.period.label)制限")
-        .accessibilityValue("残り \(formatTokenCount(metric.remainingTokens)) / 上限 \(formatTokenCount(metric.effectiveLimitTokens)) (\(pct)パーセント)")
+        .accessibilityValue("残り \(formatCompactTokenCount(metric.remainingTokens)) (\(pct)パーセント)")
     }
 }
 
-// MARK: - Provider Section View
+// MARK: - Provider Section View (Simple & Calm Layout)
 struct ProviderUsageSection: View {
     let title: String
-    let iconName: String
+    let subtitle: String
     let usedCostUSD: Double
     let budgetUSD: Double
     let metrics: [PeriodUsageMetric]
     let selectedFilter: LimitPeriod?
     let highlightedPeriod: LimitPeriod?
-    let status: String
 
     var displayedMetrics: [PeriodUsageMetric] {
         if let filter = selectedFilter {
-            return metrics.filter { $0.period == filter }
+            let matching = metrics.filter { $0.period == filter }
+            return matching.isEmpty ? metrics : matching
         }
         return metrics
     }
 
+    private var activeResetString: String? {
+        for m in displayedMetrics {
+            if let str = formatResetTimestamp(m.resetTimestamp) {
+                return "\(m.period.label)リセット \(str)"
+            }
+        }
+        return nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Label(title, systemImage: iconName)
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text(String(format: "$%.2f / $%.2f", usedCostUSD, budgetUSD))
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+            // Section Header
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
+
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Spacer()
+
+                if let resetInfo = activeResetString {
+                    Text(resetInfo)
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else if usedCostUSD > 0 || budgetUSD > 0 {
+                    Text(String(format: "$%.2f", usedCostUSD))
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
 
+            // Period Rows
             VStack(spacing: 3) {
                 ForEach(displayedMetrics) { metric in
                     PeriodLimitRowView(
@@ -1038,151 +1363,359 @@ struct ProviderUsageSection: View {
                     )
                 }
             }
-
-            HStack {
-                if let minMetric = metrics.min(by: { $0.remainingRatio < $1.remainingRatio }) {
-                    Text("最小残量枠: \(minMetric.period.label) (\(minMetric.remainingPercent)%)")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(status)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
         }
-        .padding(10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
         )
     }
 }
 
-// MARK: - Settings Popover View
+// MARK: - Settings View (Simple & Readable)
 struct SettingsPopoverView: View {
     @ObservedObject var monitor: UsageMonitor
+    var onClose: (() -> Void)? = nil
     @State private var revealAdminKey: Bool = false
+    @State private var selectedTab: Int = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("AIMeter 制限・API設定")
-                .font(.headline)
-
+        VStack(alignment: .leading, spacing: 12) {
+            // Top Bar
             HStack {
-                Text("メニューバー表示基準:")
-                    .font(.caption)
-                Spacer()
-                Picker("", selection: $monitor.menuBarPeriodMode) {
-                    Text("最小残量 (min)").tag("min")
-                    Text("5時間 (5h)").tag("5h")
-                    Text("1日 (1d)").tag("1d")
-                    Text("週次 (7d)").tag("7d")
-                    Text("月次 (30d)").tag("30d")
-                }
-                .labelsHidden()
-                .frame(width: 135)
-            }
-
-            Divider()
-
-            // OpenAI Settings
-            VStack(alignment: .leading, spacing: 5) {
-                Text("OpenAI / Codex 設定 (Keychain保護)").font(.subheadline.bold())
-                HStack(spacing: 4) {
-                    if revealAdminKey {
-                        TextField("Admin Key (任意 / 未設定時はCodex実ログ)", text: $monitor.openaiAdminKey)
-                            .textFieldStyle(.roundedBorder)
-                    } else {
-                        SecureField("Admin Key (任意 / 未設定時はCodex実ログ)", text: $monitor.openaiAdminKey)
-                            .textFieldStyle(.roundedBorder)
-                    }
+                if let onClose {
                     Button {
-                        revealAdminKey.toggle()
+                        onClose()
                     } label: {
-                        Image(systemName: revealAdminKey ? "eye.slash" : "eye")
-                            .font(.system(size: 11))
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("戻る")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(0.08))
+                        )
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
                 }
 
-                limitInputRow(label: "5時間上限トークン:", value: $monitor.openaiTokenLimit5h)
-                limitInputRow(label: "1日上限トークン:", value: $monitor.openaiTokenLimitDaily)
-                limitInputRow(label: "週次上限トークン:", value: $monitor.openaiTokenLimitWeekly)
-                limitInputRow(label: "月次上限トークン:", value: $monitor.openaiTokenLimit)
+                Text("設定")
+                    .font(.system(size: 13, weight: .semibold))
 
-                HStack {
-                    Text("月間予算目安 ($):").font(.caption)
-                    Spacer()
-                    TextField("USD", value: $monitor.openaiBudgetUSD, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 105)
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Text("メニューバー:")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: $monitor.menuBarPeriodMode) {
+                        Text("最小残量").tag("min")
+                        Text("5時間").tag("5h")
+                        Text("1日").tag("1d")
+                        Text("週次").tag("7d")
+                        Text("月次").tag("30d")
+                    }
+                    .labelsHidden()
+                    .frame(width: 90)
                 }
             }
 
-            Divider()
+            Picker("", selection: $selectedTab) {
+                Text("基本 (OpenAI / Gemini)").tag(0)
+                Text("追加サブスク (\(monitor.customSubscriptions.count))").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
-            // Gemini Settings
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Gemini / Antigravity 設定").font(.subheadline.bold())
-                TextField("GCP Project ID (任意 / 未設定時は実ログ)", text: $monitor.gcpProjectId)
-                    .textFieldStyle(.roundedBorder)
-
-                limitInputRow(label: "5時間上限トークン:", value: $monitor.geminiTokenLimit5h)
-                limitInputRow(label: "1日上限トークン:", value: $monitor.geminiTokenLimitDaily)
-                limitInputRow(label: "週次上限トークン:", value: $monitor.geminiTokenLimitWeekly)
-                limitInputRow(label: "月次上限トークン:", value: $monitor.geminiTokenLimit)
-
-                HStack {
-                    Text("月間予算目安 ($):").font(.caption)
-                    Spacer()
-                    TextField("USD", value: $monitor.geminiBudgetUSD, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 105)
-                }
+            if selectedTab == 0 {
+                builtInSettingsView
+            } else {
+                customSubscriptionsSettingsView
             }
 
             Divider()
 
             HStack {
-                Text("自動集計: ~/.codex & ~/.gemini")
-                    .font(.caption2)
+                Text("ローカルログ自動集計対応")
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("反映して更新") {
+                Button {
                     monitor.sanitizeSettings()
                     Task {
                         await monitor.refresh()
                     }
+                    onClose?()
+                } label: {
+                    Text("完了")
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             }
         }
-        .padding(14)
-        .frame(width: 325)
+        .onAppear {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+    }
+
+    @ViewBuilder
+    private var builtInSettingsView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                // OpenAI Group
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("OpenAI / Codex", isOn: $monitor.showOpenAISection)
+                        .font(.system(size: 12, weight: .semibold))
+
+                    builtInPeriodToggleRow(isOpenAI: true, csv: monitor.openaiEnabledPeriodsCSV)
+
+                    limitInputRow(label: "5時間上限", value: $monitor.openaiTokenLimit5h)
+                    limitInputRow(label: "1日上限", value: $monitor.openaiTokenLimitDaily)
+                    limitInputRow(label: "週次上限", value: $monitor.openaiTokenLimitWeekly)
+                    limitInputRow(label: "月次上限", value: $monitor.openaiTokenLimit)
+
+                    HStack(spacing: 4) {
+                        if revealAdminKey {
+                            TextField("OpenAI Admin Key (任意)", text: $monitor.openaiAdminKey)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11))
+                        } else {
+                            SecureField("OpenAI Admin Key (任意)", text: $monitor.openaiAdminKey)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11))
+                        }
+                        Button {
+                            revealAdminKey.toggle()
+                        } label: {
+                            Image(systemName: revealAdminKey ? "eye.slash" : "eye")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+
+                // Gemini Group
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Google Gemini", isOn: $monitor.showGeminiSection)
+                        .font(.system(size: 12, weight: .semibold))
+
+                    builtInPeriodToggleRow(isOpenAI: false, csv: monitor.geminiEnabledPeriodsCSV)
+
+                    limitInputRow(label: "5時間上限", value: $monitor.geminiTokenLimit5h)
+                    limitInputRow(label: "1日上限", value: $monitor.geminiTokenLimitDaily)
+                    limitInputRow(label: "週次上限", value: $monitor.geminiTokenLimitWeekly)
+                    limitInputRow(label: "月次上限", value: $monitor.geminiTokenLimit)
+
+                    TextField("GCP Project ID (任意)", text: $monitor.gcpProjectId)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+            }
+            .padding(.trailing, 4)
+        }
+        .frame(maxHeight: 330)
+    }
+
+    @ViewBuilder
+    private func builtInPeriodToggleRow(isOpenAI: Bool, csv: String) -> some View {
+        HStack(spacing: 6) {
+            Text("表示枠")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            ForEach(LimitPeriod.allCases) { period in
+                let isOn = monitor.isBuiltInPeriodEnabled(csv: csv, period: period)
+                Button {
+                    monitor.setBuiltInPeriod(isOpenAI: isOpenAI, period: period, enabled: !isOn)
+                } label: {
+                    Text(period.label)
+                        .font(.system(size: 11, weight: isOn ? .semibold : .regular))
+                        .foregroundStyle(isOn ? .primary : .secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(isOn ? Color.primary.opacity(0.14) : Color.primary.opacity(0.04))
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var customSubscriptionsSettingsView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 5) {
+                Button("+ Claude") { monitor.addSubscription(.claudePreset()) }
+                Button("+ Cursor") { monitor.addSubscription(.cursorPreset()) }
+                Button("+ Copilot") { monitor.addSubscription(.copilotPreset()) }
+                Button("+ Perplexity") { monitor.addSubscription(.perplexityPreset()) }
+                Button("+ 新規") { monitor.addSubscription(.blankCustom()) }
+            }
+            .controlSize(.small)
+
+            if monitor.customSubscriptions.isEmpty {
+                Text("上のボタンから監視したいサブスクを追加できます。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 36)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach($monitor.customSubscriptions) { $sub in
+                            customSubscriptionEditorCard(sub: $sub)
+                        }
+                    }
+                    .padding(.trailing, 4)
+                }
+                .frame(maxHeight: 290)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func customSubscriptionEditorCard(sub: Binding<CustomSubscriptionConfig>) -> some View {
+        let currentSub = sub.wrappedValue
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Toggle("", isOn: sub.isEnabled)
+                    .labelsHidden()
+                TextField("名前", text: sub.name)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, weight: .medium))
+                TextField("略称", text: sub.shortName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 48)
+                Toggle("メニューバー", isOn: sub.showInMenuBar)
+                    .font(.system(size: 11))
+                Button {
+                    monitor.removeSubscription(id: currentSub.id)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .padding(4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 6) {
+                Text("表示枠")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                ForEach(LimitPeriod.allCases) { period in
+                    let isOn = currentSub.isPeriodEnabled(period)
+                    Button {
+                        sub.wrappedValue.setPeriod(period, enabled: !isOn)
+                    } label: {
+                        Text(period.label)
+                            .font(.system(size: 11, weight: isOn ? .semibold : .regular))
+                            .foregroundStyle(isOn ? .primary : .secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(isOn ? Color.primary.opacity(0.14) : Color.primary.opacity(0.04))
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if currentSub.isPeriodEnabled(.fiveHours) {
+                periodPairRow(label: "5時間 (使用 / 上限)", used: sub.manualUsed5h, limit: sub.limit5h)
+            }
+            if currentSub.isPeriodEnabled(.daily) {
+                periodPairRow(label: "1日 (使用 / 上限)", used: sub.manualUsedDaily, limit: sub.limitDaily)
+            }
+            if currentSub.isPeriodEnabled(.weekly) {
+                periodPairRow(label: "週次 (使用 / 上限)", used: sub.manualUsedWeekly, limit: sub.limitWeekly)
+            }
+            if currentSub.isPeriodEnabled(.monthly) {
+                periodPairRow(label: "月次 (使用 / 上限)", used: sub.manualUsedMonthly, limit: sub.limitMonthly)
+            }
+
+            HStack {
+                Text("月額料金 ($)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                TextField("USD", value: sub.usedCostUSD, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    @ViewBuilder
+    private func periodPairRow(label: String, used: Binding<Int>, limit: Binding<Int>) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            TextField("使用", value: used, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 80)
+            Text("/")
+                .foregroundStyle(.secondary)
+            TextField("上限", value: limit, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 80)
+        }
     }
 
     @ViewBuilder
     private func limitInputRow(label: String, value: Binding<Int>) -> some View {
         HStack {
-            Text(label).font(.caption)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
             Spacer()
             TextField("Tokens", value: value, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 105)
+                .frame(width: 115)
         }
     }
 }
 
 // MARK: - Window Accessor for Reliable Floating Window Configuration
+final class FirstMouseHostingHelperView: NSView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+}
+
 struct DesktopWidgetWindowAccessor: NSViewRepresentable {
+    var allowBackgroundDrag: Bool = true
+
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+        let view = FirstMouseHostingHelperView()
         DispatchQueue.main.async {
             if let window = view.window {
-                Self.configure(window: window)
+                Self.configure(window: window, allowBackgroundDrag: allowBackgroundDrag)
             }
         }
         return view
@@ -1191,15 +1724,15 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             if let window = nsView.window {
-                Self.configure(window: window)
+                Self.configure(window: window, allowBackgroundDrag: allowBackgroundDrag)
             }
         }
     }
 
-    static func configure(window: NSWindow) {
+    static func configure(window: NSWindow, allowBackgroundDrag: Bool) {
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = allowBackgroundDrag
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = true
@@ -1209,10 +1742,14 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.setFrameAutosaveName("AIMeterDesktopWidgetFrame")
+        if !allowBackgroundDrag {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        }
     }
 }
 
-// MARK: - Main Card View
+// MARK: - Main Card View (Simple, High-Legibility Design)
 struct AIMeterCardView: View {
     @ObservedObject var monitor: UsageMonitor
     var isMenuBar: Bool = false
@@ -1222,7 +1759,7 @@ struct AIMeterCardView: View {
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
+        f.dateFormat = "HH:mm"
         return f
     }()
 
@@ -1234,122 +1771,184 @@ struct AIMeterCardView: View {
         LimitPeriod(rawValue: monitor.menuBarPeriodMode)
     }
 
+    private var enabledCustomSubscriptions: [CustomSubscriptionConfig] {
+        monitor.customSubscriptions.filter(\.isEnabled)
+    }
+
+    private var totalVisibleProvidersCount: Int {
+        (monitor.showOpenAISection ? 1 : 0) + (monitor.showGeminiSection ? 1 : 0) + enabledCustomSubscriptions.count
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Header
-            HStack {
-                HStack(spacing: 6) {
-                    Image(systemName: "gauge.with.dots.needle.67percent")
-                        .foregroundStyle(.cyan)
-                    Text("AI Meter")
-                        .font(.system(size: 14, weight: .bold))
-                }
-                Spacer()
-                Button {
-                    Task {
-                        await monitor.refresh()
+            if showSettings {
+                SettingsPopoverView(monitor: monitor) {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showSettings = false
                     }
-                } label: {
-                    Image(systemName: monitor.isRefreshing ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.clockwise")
-                        .font(.system(size: 12, weight: .semibold))
                 }
-                .buttonStyle(.plain)
-                .help("今すぐ更新")
-                .accessibilityLabel("今すぐ更新")
-
-                Button {
-                    showSettings.toggle()
-                } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .help("設定")
-                .accessibilityLabel("設定を開く")
-                .popover(isPresented: $showSettings, arrowEdge: .bottom) {
-                    SettingsPopoverView(monitor: monitor)
-                }
-            }
-
-            // Period Filter Tabs (All / 5h / 1d / Weekly / Monthly)
-            Picker("表示枠", selection: $filterSelection) {
-                Text("全枠").tag("all")
-                ForEach(LimitPeriod.allCases) { period in
-                    Text(period.label).tag(period.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-
-            // OpenAI Section
-            ProviderUsageSection(
-                title: "OpenAI (GPT / Codex)",
-                iconName: "sparkles",
-                usedCostUSD: monitor.openaiCostUSD,
-                budgetUSD: monitor.openaiBudgetUSD,
-                metrics: monitor.openaiMetrics,
-                selectedFilter: selectedPeriodFilter,
-                highlightedPeriod: highlightedMenuBarPeriod,
-                status: monitor.openaiStatus
-            )
-
-            // Gemini Section
-            ProviderUsageSection(
-                title: "Google Gemini",
-                iconName: "bolt.horizontal.circle.fill",
-                usedCostUSD: monitor.geminiCostUSD,
-                budgetUSD: monitor.geminiBudgetUSD,
-                metrics: monitor.geminiMetrics,
-                selectedFilter: selectedPeriodFilter,
-                highlightedPeriod: highlightedMenuBarPeriod,
-                status: monitor.geminiStatus
-            )
-
-            // Footer
-            HStack {
-                Text("更新: \(Self.timeFormatter.string(from: monitor.lastUpdated))")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(String(format: "30日相当: $%.2f", monitor.totalCostUSD))
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-            }
-
-            if isMenuBar {
-                Divider()
-                HStack {
-                    Button("今すぐ更新") {
-                        Task {
-                            await monitor.refresh()
-                        }
-                    }
-                    .controlSize(.small)
-
-                    Button("ウィジェット表示") {
-                        openWindow(id: "desktop-widget")
-                    }
-                    .controlSize(.small)
+            } else {
+                // Header
+                HStack(spacing: 8) {
+                    Text("AIMeter")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
 
                     Spacer()
 
-                    Button("終了") {
-                        NSApplication.shared.terminate(nil)
+                    Button {
+                        Task {
+                            await monitor.refresh()
+                        }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 22)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(Color.primary.opacity(0.06))
+                            )
+                            .contentShape(Rectangle())
                     }
-                    .controlSize(.small)
+                    .buttonStyle(.plain)
+                    .help("更新")
+                    .accessibilityLabel("今すぐ更新")
+
+                    Button {
+                        NSApplication.shared.activate(ignoringOtherApps: true)
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            showSettings = true
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "slider.horizontal.3")
+                            Text("設定")
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(Color.primary.opacity(0.06))
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("設定・サブスク管理")
+                    .accessibilityLabel("設定を開く")
+                }
+
+                // Period Filter Bar
+                Picker("", selection: $filterSelection) {
+                    Text("すべて").tag("all")
+                    ForEach(LimitPeriod.allCases) { period in
+                        Text(period.label).tag(period.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+
+                // Provider Sections
+                if totalVisibleProvidersCount > 2 {
+                    ScrollView {
+                        providerSectionsStack
+                    }
+                    .frame(maxHeight: 360)
+                } else {
+                    providerSectionsStack
+                }
+
+                // Quiet Footer
+                HStack {
+                    Text("\(Self.timeFormatter.string(from: monitor.lastUpdated)) 更新")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                    Text(String(format: "月間計 $%.2f", monitor.totalCostUSD))
+                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 2)
+
+                if isMenuBar {
+                    Divider()
+                    HStack {
+                        Button("ウィジェットを表示") {
+                            openWindow(id: "desktop-widget")
+                        }
+                        .controlSize(.small)
+
+                        Spacer()
+
+                        Button("終了") {
+                            NSApplication.shared.terminate(nil)
+                        }
+                        .controlSize(.small)
+                    }
                 }
             }
         }
         .padding(14)
-        .frame(width: 335)
+        .frame(width: showSettings ? 350 : 310)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.regularMaterial)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.15), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
                 )
         )
+        .background(
+            Group {
+                if !isMenuBar {
+                    DesktopWidgetWindowAccessor(allowBackgroundDrag: !showSettings)
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var providerSectionsStack: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if monitor.showOpenAISection {
+                ProviderUsageSection(
+                    title: "OpenAI",
+                    subtitle: monitor.openaiStatus,
+                    usedCostUSD: monitor.openaiCostUSD,
+                    budgetUSD: monitor.openaiBudgetUSD,
+                    metrics: monitor.openaiMetrics,
+                    selectedFilter: selectedPeriodFilter,
+                    highlightedPeriod: highlightedMenuBarPeriod
+                )
+            }
+
+            if monitor.showGeminiSection {
+                ProviderUsageSection(
+                    title: "Gemini",
+                    subtitle: monitor.geminiStatus,
+                    usedCostUSD: monitor.geminiCostUSD,
+                    budgetUSD: monitor.geminiBudgetUSD,
+                    metrics: monitor.geminiMetrics,
+                    selectedFilter: selectedPeriodFilter,
+                    highlightedPeriod: highlightedMenuBarPeriod
+                )
+            }
+
+            ForEach(enabledCustomSubscriptions) { sub in
+                ProviderUsageSection(
+                    title: sub.name,
+                    subtitle: monitor.customProviderLiveUsage[sub.id]?.status ?? sub.statusNote,
+                    usedCostUSD: monitor.effectiveCostUSD(for: sub),
+                    budgetUSD: sub.budgetUSD,
+                    metrics: monitor.metrics(for: sub),
+                    selectedFilter: selectedPeriodFilter,
+                    highlightedPeriod: highlightedMenuBarPeriod
+                )
+            }
+        }
     }
 }
 
@@ -1361,7 +1960,6 @@ struct AIMeterApp: App {
     var body: some Scene {
         Window("AI Meter Widget", id: "desktop-widget") {
             AIMeterCardView(monitor: monitor, isMenuBar: false)
-                .background(DesktopWidgetWindowAccessor())
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -1370,7 +1968,7 @@ struct AIMeterApp: App {
             AIMeterCardView(monitor: monitor, isMenuBar: true)
         } label: {
             Text(monitor.menuBarTitle)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
         }
         .menuBarExtraStyle(.window)
     }

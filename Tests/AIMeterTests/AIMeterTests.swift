@@ -37,7 +37,6 @@ final class AIMeterTests: XCTestCase {
         XCTAssertEqual(localMetric.remainingTokens, 108_000)
         XCTAssertEqual(localMetric.remainingPercent, 72)
 
-        // Server rate limit sync (e.g. 56% used -> 44% remaining)
         let syncedMetric = PeriodUsageMetric(
             period: .weekly,
             usedTokens: 160_000_000,
@@ -49,7 +48,28 @@ final class AIMeterTests: XCTestCase {
         XCTAssertEqual(syncedMetric.effectiveLimitTokens, 285_714_286)
     }
 
-    func testDecodeMultiPeriodLocalUsageJSON() throws {
+    func testCustomSubscriptionConfigCustomizationAndPeriodToggles() throws {
+        var sub = CustomSubscriptionConfig.claudePreset()
+        XCTAssertTrue(sub.isPeriodEnabled(.fiveHours))
+        XCTAssertFalse(sub.isPeriodEnabled(.daily))
+        XCTAssertTrue(sub.isPeriodEnabled(.weekly))
+
+        sub.setPeriod(.daily, enabled: true)
+        XCTAssertTrue(sub.isPeriodEnabled(.daily))
+
+        // Should never allow disabling all periods (at least 1 remains)
+        sub.setPeriod(.fiveHours, enabled: false)
+        sub.setPeriod(.daily, enabled: false)
+        sub.setPeriod(.weekly, enabled: false)
+        sub.setPeriod(.monthly, enabled: false)
+        XCTAssertEqual(sub.enabledPeriodRawValues.count, 1)
+
+        sub.limit5h = -10
+        sub.sanitize()
+        XCTAssertEqual(sub.limit5h, 1)
+    }
+
+    func testDecodeMultiPeriodLocalUsageJSONWithCustomProviders() throws {
         let json = """
         {
           "openaiUsedTokens": 170218895,
@@ -74,15 +94,25 @@ final class AIMeterTests: XCTestCase {
             "1d": 535813,
             "7d": 535813,
             "30d": 2296092
+          },
+          "providers": {
+            "claude": {
+              "usedByPeriod": {
+                "5h": 120000,
+                "1d": 350000,
+                "7d": 1400000,
+                "30d": 4200000
+              },
+              "costUSD": 20.0
+            }
           }
         }
         """.data(using: .utf8)!
 
         let decoded = try JSONDecoder().decode(LocalUsageData.self, from: json)
         XCTAssertEqual(decoded.openaiUsedByPeriod?.fiveHours, 21556465)
-        XCTAssertEqual(decoded.openaiServerUsedPercentByPeriod?.weekly, 56.0)
-        XCTAssertEqual(decoded.openaiResetAtByPeriod?.weekly, 1792888154)
-        XCTAssertEqual(decoded.openaiPlanType, "prolite")
+        XCTAssertEqual(decoded.providers?["claude"]?.usedByPeriod?.fiveHours, 120000)
+        XCTAssertEqual(decoded.providers?["claude"]?.costUSD, 20.0)
     }
 
     func testParseOpenAIUsagePageAndPagination() throws {

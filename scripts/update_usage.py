@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect real local AI usage (OpenAI/Codex & Gemini/Antigravity) and atomically update ~/.ai_meter_usage.json."""
+"""Collect real local AI usage (OpenAI/Codex, Gemini/Antigravity, Claude) and atomically update ~/.ai_meter_usage.json."""
 
 import datetime
 import glob
@@ -104,7 +104,6 @@ def collect_codex_usage(now: datetime.datetime, cutoffs: Dict[str, datetime.date
                         continue
 
                     uncached_in = max(0, d_in - d_cached)
-                    # Effective quota tokens: uncached input + output + 10% weight on cached input
                     effective_tokens = uncached_in + d_out + int(d_cached * 0.10)
                     raw_tokens = d_in + d_out
 
@@ -179,7 +178,6 @@ def collect_gemini_usage(now: datetime.datetime, cutoffs: Dict[str, datetime.dat
     cost_usd_30d = 0.0
     cutoff_30d_epoch = cutoffs["30d"].timestamp()
 
-    # 1. Antigravity brain transcripts
     ag_pattern = str(
         Path.home()
         / ".gemini"
@@ -219,7 +217,6 @@ def collect_gemini_usage(now: datetime.datetime, cutoffs: Dict[str, datetime.dat
                         raw_tot = inp + cached + out
                         step_cost = (inp * 1.25 + cached * 0.3125 + out * 5.0) / 1_000_000.0
                     else:
-                        # Fallback estimation when step omits explicit token counters
                         content_str = str(obj.get("content") or "") + str(obj.get("thinking") or "")
                         est_tokens = max(1, len(content_str) // 4)
                         effective = est_tokens
@@ -236,7 +233,6 @@ def collect_gemini_usage(now: datetime.datetime, cutoffs: Dict[str, datetime.dat
         except OSError:
             continue
 
-    # 2. Gemini CLI tmp chats
     chats_pattern = str(Path.home() / ".gemini" / "tmp" / "*" / "chats" / "*.json")
     for fp in glob.glob(chats_pattern):
         try:
@@ -271,8 +267,64 @@ def collect_gemini_usage(now: datetime.datetime, cutoffs: Dict[str, datetime.dat
     }
 
 
+def collect_claude_usage(now: datetime.datetime, cutoffs: Dict[str, datetime.datetime]) -> Dict[str, Any]:
+    used_by_period = {"5h": 0, "1d": 0, "7d": 0, "30d": 0}
+    cost_usd_30d = 0.0
+    cutoff_30d_epoch = cutoffs["30d"].timestamp()
+
+    patterns = [
+        str(Path.home() / ".claude" / "projects" / "**" / "*.jsonl"),
+        str(Path.home() / ".claude" / "sessions" / "**" / "*.jsonl"),
+    ]
+    for pat in patterns:
+        for fp in glob.glob(pat, recursive=True):
+            try:
+                if os.path.getmtime(fp) < cutoff_30d_epoch:
+                    continue
+                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if "usage" not in line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        dt = parse_iso_utc(obj.get("timestamp") or obj.get("createdAt") or "")
+                        msg = obj.get("message") or {}
+                        usage = msg.get("usage") or obj.get("usage") or {}
+                        if not dt or not isinstance(usage, dict):
+                            continue
+                        inp = int(usage.get("input_tokens") or 0)
+                        cached = int(usage.get("cache_read_input_tokens") or 0)
+                        out = int(usage.get("output_tokens") or 0)
+                        effective = inp + out + int(cached * 0.10)
+                        if effective <= 0:
+                            continue
+                        for key, cutoff_dt in cutoffs.items():
+                            if dt >= cutoff_dt:
+                                used_by_period[key] += effective
+                        if dt >= cutoffs["30d"]:
+                            cost_usd_30d += (inp * 3.0 + cached * 0.30 + out * 15.0) / 1_000_000.0
+            except Exception:
+                continue
+
+    return {
+        "usedByPeriod": used_by_period,
+        "costUSD": round(cost_usd_30d, 2),
+    }
+
+
 def main() -> None:
     target_path = Path.home() / ".ai_meter_usage.json"
+    existing_providers: Dict[str, Any] = {}
+    if target_path.exists():
+        try:
+            existing_json = json.loads(target_path.read_text(encoding="utf-8"))
+            if isinstance(existing_json, dict) and isinstance(existing_json.get("providers"), dict):
+                existing_providers = existing_json["providers"]
+        except Exception:
+            pass
+
     now = datetime.datetime.now(datetime.timezone.utc)
     cutoffs = {
         "5h": now - datetime.timedelta(hours=5),
@@ -283,6 +335,10 @@ def main() -> None:
 
     codex = collect_codex_usage(now, cutoffs)
     gemini = collect_gemini_usage(now, cutoffs)
+    claude = collect_claude_usage(now, cutoffs)
+
+    if sum(claude["usedByPeriod"].values()) > 0 or "claude" not in existing_providers:
+        existing_providers["claude"] = claude
 
     payload: Dict[str, Any] = {
         "openaiUsedTokens": codex["used_by_period"]["30d"],
@@ -297,6 +353,7 @@ def main() -> None:
         "geminiCostUSD": gemini["cost_usd_30d"],
         "geminiUsedByPeriod": gemini["used_by_period"],
         "geminiRawTokensByPeriod": gemini["raw_by_period"],
+        "providers": existing_providers,
         "source": "local_logs",
         "updatedAt": now.isoformat(),
     }
