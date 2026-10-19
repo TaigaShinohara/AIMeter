@@ -1659,8 +1659,7 @@ struct ProviderUsageSection: View {
 
     var displayedMetrics: [PeriodUsageMetric] {
         if let filter = selectedFilter {
-            let matching = metrics.filter { $0.period == filter }
-            return matching.isEmpty ? metrics : matching
+            return metrics.filter { $0.period == filter }
         }
         return metrics
     }
@@ -1675,7 +1674,10 @@ struct ProviderUsageSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        if displayedMetrics.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
             // Section Header
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(title)
@@ -1717,6 +1719,7 @@ struct ProviderUsageSection: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.primary.opacity(0.04))
         )
+        }
     }
 }
 
@@ -2224,8 +2227,29 @@ struct AIMeterCardView: View {
         monitor.customSubscriptions.filter(\.isEnabled)
     }
 
+    private func hasMatchingPeriod(metrics: [PeriodUsageMetric]) -> Bool {
+        if let filter = selectedPeriodFilter {
+            return metrics.contains { $0.period == filter }
+        }
+        return true
+    }
+
+    private var isShowOpenAI: Bool {
+        monitor.showOpenAISection && hasMatchingPeriod(metrics: monitor.openaiMetrics)
+    }
+
+    private var isShowGemini: Bool {
+        monitor.showGeminiSection && hasMatchingPeriod(metrics: monitor.geminiMetrics)
+    }
+
+    private var visibleCustomSubscriptions: [CustomSubscriptionConfig] {
+        enabledCustomSubscriptions.filter { sub in
+            hasMatchingPeriod(metrics: monitor.metrics(for: sub))
+        }
+    }
+
     private var totalVisibleProvidersCount: Int {
-        (monitor.showOpenAISection ? 1 : 0) + (monitor.showGeminiSection ? 1 : 0) + enabledCustomSubscriptions.count
+        (isShowOpenAI ? 1 : 0) + (isShowGemini ? 1 : 0) + visibleCustomSubscriptions.count
     }
 
     var body: some View {
@@ -2356,7 +2380,18 @@ struct AIMeterCardView: View {
                 .controlSize(.regular)
 
                 // Provider Sections
-                if totalVisibleProvidersCount > 2 {
+                if totalVisibleProvidersCount == 0 {
+                    VStack(spacing: 8) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.tertiary)
+                        Text("\(selectedPeriodFilter?.label ?? "")枠が設定されているサービスはありません")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 28)
+                } else if totalVisibleProvidersCount > 2 {
                     ScrollView {
                         providerSectionsStack
                     }
@@ -2417,7 +2452,7 @@ struct AIMeterCardView: View {
     @ViewBuilder
     private var providerSectionsStack: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if monitor.showOpenAISection {
+            if isShowOpenAI {
                 ProviderUsageSection(
                     title: "OpenAI",
                     subtitle: monitor.openaiStatus,
@@ -2429,7 +2464,7 @@ struct AIMeterCardView: View {
                 )
             }
 
-            if monitor.showGeminiSection {
+            if isShowGemini {
                 ProviderUsageSection(
                     title: "Gemini",
                     subtitle: monitor.geminiStatus,
@@ -2441,7 +2476,7 @@ struct AIMeterCardView: View {
                 )
             }
 
-            ForEach(enabledCustomSubscriptions) { sub in
+            ForEach(visibleCustomSubscriptions) { sub in
                 ProviderUsageSection(
                     title: sub.name,
                     subtitle: monitor.customProviderLiveUsage[sub.id]?.status ?? sub.statusNote,

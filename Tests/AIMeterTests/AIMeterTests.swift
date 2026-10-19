@@ -251,4 +251,47 @@ final class AIMeterTests: XCTestCase {
         let decoded = try JSONDecoder().decode(LocalUsageData.self, from: readBackData)
         XCTAssertEqual(decoded.source, "local_logs_native")
     }
+
+    func testPeriodFilterDisplaysOnlyMatchingMetrics() {
+        let metrics = [
+            PeriodUsageMetric(period: .fiveHours, usedTokens: 100, limitTokens: 1000),
+            PeriodUsageMetric(period: .weekly, usedTokens: 200, limitTokens: 2000),
+            PeriodUsageMetric(period: .monthly, usedTokens: 300, limitTokens: 3000)
+        ]
+
+        let sectionFilteredTo2h = ProviderUsageSection(
+            title: "Test",
+            subtitle: "",
+            usedCostUSD: 0,
+            budgetUSD: 0,
+            metrics: metrics,
+            selectedFilter: .twoHours,
+            highlightedPeriod: nil
+        )
+        // 2h is not in metrics, so displayedMetrics must be empty, not fall back to all metrics
+        XCTAssertTrue(sectionFilteredTo2h.displayedMetrics.isEmpty)
+
+        let sectionFilteredTo5h = ProviderUsageSection(
+            title: "Test",
+            subtitle: "",
+            usedCostUSD: 0,
+            budgetUSD: 0,
+            metrics: metrics,
+            selectedFilter: .fiveHours,
+            highlightedPeriod: nil
+        )
+        XCTAssertEqual(sectionFilteredTo5h.displayedMetrics.count, 1)
+        XCTAssertEqual(sectionFilteredTo5h.displayedMetrics.first?.period, .fiveHours)
+
+        let sectionUnfiltered = ProviderUsageSection(
+            title: "Test",
+            subtitle: "",
+            usedCostUSD: 0,
+            budgetUSD: 0,
+            metrics: metrics,
+            selectedFilter: nil,
+            highlightedPeriod: nil
+        )
+        XCTAssertEqual(sectionUnfiltered.displayedMetrics.count, 3)
+    }
 }
