@@ -30,7 +30,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Native macOS Settings View
+// MARK: - Native macOS Tahoe Settings View
 struct SettingsView: View {
     @ObservedObject var monitor: UsageMonitor
     @ObservedObject private var launchAtLogin = LaunchAtLoginManager.shared
@@ -685,46 +685,45 @@ private struct HelpSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 18) {
                 // About Header
-                HStack(spacing: 16) {
+                HStack(spacing: 14) {
                     Image(systemName: "gauge.with.needle.fill")
-                        .font(.system(size: 40))
+                        .font(.system(size: 36))
                         .foregroundStyle(Color.accentColor)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("AIMeter")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                        Text("ローカル完結型 AI 利用量メーター · macOS Sonoma / Sequoia 対応")
+                            .font(.title2.weight(.bold))
+                        Text("ローカル完結型 AI 利用量・残量メーター")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    Spacer()
                 }
-                .padding(.bottom, 8)
-
-                Divider()
+                .padding(14)
+                .background(FrostedGlassCardBackground(cornerRadius: 12))
 
                 // Privacy Box
-                GroupBox {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "lock.shield.fill")
-                            .font(.title3)
-                            .foregroundStyle(.green)
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.title3)
+                        .foregroundStyle(.green)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("完全ローカル・プライバシー設計")
-                                .font(.headline)
-                            Text("AIMeterはMac内に各AIツールが保存しているローカルログのみを読み取り合算します。プロンプト内容やコードを外部サーバーへ送信することはありません。")
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                        }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("完全ローカル・プライバシー設計")
+                            .font(.headline)
+                        Text("AIMeterはMac内に各AIツールが保存しているローカルログのみを読み取り合算します。プロンプト内容やコードを外部サーバーへ送信することはありません。")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(6)
+                    Spacer()
                 }
+                .padding(14)
+                .background(FrostedGlassCardBackground(cornerRadius: 12))
 
                 // QA Section
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
                     Text("よくある質問 (Q&A)")
                         .font(.headline)
 
@@ -734,7 +733,7 @@ private struct HelpSettingsView: View {
                     qaList
                 }
             }
-            .padding(24)
+            .padding(20)
         }
         .navigationTitle("ヘルプ & 情報")
     }

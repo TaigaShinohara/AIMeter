@@ -93,13 +93,16 @@ struct SetupWizardView: View {
         VStack(alignment: .leading, spacing: 16) {
             // Header
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "slider.horizontal.2.square")
-                    .font(.system(size: 30))
-                    .foregroundStyle(.tint)
+                LiquidGlassIconOrb(
+                    systemName: "slider.horizontal.2.square",
+                    accent: .accentColor,
+                    size: 38,
+                    iconSize: 19
+                )
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("AIサービスの確認・初期セットアップ")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
                     Text("表示したいサービスの選択や、新規サービスの追加・パス指定を行えます。")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
@@ -114,8 +117,7 @@ struct SetupWizardView: View {
                         Image(systemName: "questionmark.circle")
                             .font(.system(size: 14))
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
+                    .buttonStyle(GlassCapsuleButtonStyle())
                     .help("ヘルプ・Q&Aを見る")
                 }
 
@@ -135,16 +137,14 @@ struct SetupWizardView: View {
                         }
                         Text("再検出")
                     }
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .font(.system(size: 13, weight: .medium))
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
+                .buttonStyle(GlassCapsuleButtonStyle())
                 .disabled(isScanning)
             }
 
             Divider()
+                .opacity(0.35)
 
             // Service List & Add Service Section
             ScrollView {
@@ -169,6 +169,7 @@ struct SetupWizardView: View {
             .frame(maxHeight: 360)
 
             Divider()
+                .opacity(0.35)
 
             // Footer Actions
             HStack {
@@ -182,14 +183,14 @@ struct SetupWizardView: View {
                     monitor.hasCompletedSetupWizard = true
                     onComplete()
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
+                .buttonStyle(GlassCapsuleButtonStyle(isProminent: true))
                 .font(.system(size: 14, weight: .semibold))
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(18)
         .frame(width: 530)
+        .background(LiquidGlassBackground(cornerRadius: 20))
         .onAppear {
             if monitor.customSubscriptions.isEmpty {
                 monitor.autoAddDetectedSubscriptions()
@@ -204,6 +205,7 @@ struct SetupWizardView: View {
         let isDetected = isServiceDetected(service)
         let preview = serviceUsagePreview(service)
         let customPath = monitor.customProviderPaths[service.id]
+        let accent = providerAccentColor(for: service.id)
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
@@ -217,10 +219,12 @@ struct SetupWizardView: View {
                 .controlSize(.regular)
 
                 // Icon + Name
-                Image(systemName: service.iconName)
-                    .font(.system(size: 16))
-                    .foregroundStyle(isEnabled ? .primary : .secondary)
-                    .frame(width: 22)
+                LiquidGlassIconOrb(
+                    systemName: service.iconName,
+                    accent: isEnabled ? accent : .secondary,
+                    size: 26,
+                    iconSize: 13
+                )
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
@@ -230,11 +234,11 @@ struct SetupWizardView: View {
 
                         // Status Badge
                         if customPath != nil {
-                            badgeView(text: "手動指定", color: .blue)
+                            LiquidGlassBadge(text: "手動指定", tint: .blue)
                         } else if isDetected {
-                            badgeView(text: "検出済み", color: .green)
+                            LiquidGlassBadge(text: "検出済み", tint: .green)
                         } else {
-                            badgeView(text: "未検出", color: .secondary.opacity(0.6))
+                            LiquidGlassBadge(text: "未検出")
                         }
                     }
 
@@ -260,11 +264,9 @@ struct SetupWizardView: View {
                         Image(systemName: customPath != nil ? "folder.fill" : "folder.badge.gearshape")
                         Text(customPath != nil ? "パス変更" : "パス指定")
                     }
-                    .font(.system(size: 12))
+                    .font(.system(size: 11.5))
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .foregroundStyle(customPath != nil ? Color.blue : Color.secondary)
+                .buttonStyle(GlassCapsuleButtonStyle(isSelected: customPath != nil))
             }
 
             // Inline Path Picker Expansion
@@ -272,14 +274,12 @@ struct SetupWizardView: View {
                 pathEditorView(serviceId: service.id, defaultHint: service.defaultLogHint)
             }
         }
-        .padding(10)
+        .padding(11)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isEnabled ? Color.primary.opacity(0.04) : Color.clear)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-                )
+            FrostedGlassCardBackground(
+                cornerRadius: 12,
+                accentTint: isEnabled ? accent : nil
+            )
         )
     }
 
@@ -288,6 +288,7 @@ struct SetupWizardView: View {
     private func extraSubscriptionRowView(sub: CustomSubscriptionConfig) -> some View {
         let customPath = monitor.customProviderPaths[sub.id]
         let isExpanded = activePathPickerProviderId == sub.id
+        let accent = providerAccentColor(for: sub.id)
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
@@ -303,9 +304,12 @@ struct SetupWizardView: View {
                 .toggleStyle(.checkbox)
                 .controlSize(.regular)
 
-                Image(systemName: sub.iconName)
-                    .font(.system(size: 16))
-                    .frame(width: 22)
+                LiquidGlassIconOrb(
+                    systemName: sub.iconName,
+                    accent: sub.isEnabled ? accent : .secondary,
+                    size: 26,
+                    iconSize: 13
+                )
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
@@ -313,9 +317,9 @@ struct SetupWizardView: View {
                             .font(.system(size: 14, weight: .bold))
 
                         if customPath != nil {
-                            badgeView(text: "手動指定", color: .blue)
+                            LiquidGlassBadge(text: "手動指定", tint: .blue)
                         } else {
-                            badgeView(text: "カスタム", color: .purple)
+                            LiquidGlassBadge(text: "カスタム", tint: .purple)
                         }
                     }
 
@@ -346,11 +350,9 @@ struct SetupWizardView: View {
                         Image(systemName: customPath != nil ? "folder.fill" : "folder.badge.gearshape")
                         Text(customPath != nil ? "パス変更" : "パス指定")
                     }
-                    .font(.system(size: 12))
+                    .font(.system(size: 11.5))
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .foregroundStyle(customPath != nil ? Color.blue : Color.secondary)
+                .buttonStyle(GlassCapsuleButtonStyle(isSelected: customPath != nil))
 
                 Button {
                     monitor.removeSubscription(id: sub.id)
@@ -367,14 +369,12 @@ struct SetupWizardView: View {
                 pathEditorView(serviceId: sub.id, defaultHint: "~/path/to/logs")
             }
         }
-        .padding(10)
+        .padding(11)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(sub.isEnabled ? Color.primary.opacity(0.04) : Color.clear)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-                )
+            FrostedGlassCardBackground(
+                cornerRadius: 12,
+                accentTint: sub.isEnabled ? accent : nil
+            )
         )
     }
 

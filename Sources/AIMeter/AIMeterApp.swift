@@ -993,11 +993,12 @@ func gaugeWarningSymbol(for remainingRatio: Double) -> String? {
     }
 }
 
-// MARK: - Single Period Limit Row View (macOS Native HIG Design)
+// MARK: - Single Period Limit Row View (macOS Tahoe Liquid Glass Design)
 struct PeriodLimitRowView: View {
     let metric: PeriodUsageMetric
     let isHighlighted: Bool
     var unit: String = "tokens"
+    var accent: Color = .accentColor
 
     var body: some View {
         let ratio = metric.remainingRatio
@@ -1007,15 +1008,16 @@ struct PeriodLimitRowView: View {
         HStack(spacing: 8) {
             // 1. Period Label
             Text(metric.period.label)
-                .font(.caption.weight(isHighlighted ? .bold : .medium))
+                .font(.caption.weight(isHighlighted ? .semibold : .regular))
                 .foregroundStyle(isHighlighted ? .primary : .secondary)
                 .frame(width: 38, alignment: .leading)
 
-            // 2. Native macOS Progress Bar
-            ProgressView(value: min(max(ratio, 0.0), 1.0), total: 1.0)
-                .progressViewStyle(.linear)
-                .tint(gaugeColor(for: ratio))
-                .controlSize(.small)
+            // 2. Refined Liquid Glass Progress Bar
+            LiquidGlassProgressBar(
+                ratio: ratio,
+                accent: accent,
+                height: 6.0
+            )
 
             // 3. Remaining Amount with Unit
             HStack(spacing: 2) {
@@ -1031,13 +1033,13 @@ struct PeriodLimitRowView: View {
             .lineLimit(1)
             .frame(width: 76, alignment: .trailing)
 
-            // 4. Remaining Percentage (100%でも改行されない幅と設定)
+            // 4. Remaining Percentage
             Text("\(pct)%")
                 .font(.callout.weight(.semibold).monospacedDigit())
                 .foregroundStyle(percentageTextColor(for: ratio))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .frame(width: 48, alignment: .trailing)
+                .frame(width: 46, alignment: .trailing)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
@@ -1046,7 +1048,7 @@ struct PeriodLimitRowView: View {
     }
 }
 
-// MARK: - Provider Section View (macOS Native Control Center Style Tile)
+// MARK: - Provider Section View (macOS Control Center Liquid Glass Module Style)
 struct ProviderUsageSection: View {
     let title: String
     let subtitle: String
@@ -1057,6 +1059,9 @@ struct ProviderUsageSection: View {
     let highlightedPeriod: LimitPeriod?
     var unit: String = "tokens"
     var isDetailed: Bool = true
+    var iconName: String? = nil
+
+    @State private var isHovered: Bool = false
 
     var displayedMetrics: [PeriodUsageMetric] {
         if let filter = selectedFilter {
@@ -1086,14 +1091,30 @@ struct ProviderUsageSection: View {
         return nil
     }
 
+    private var accent: Color {
+        providerAccentColor(for: title)
+    }
+
+    private var resolvedIconName: String {
+        if let iconName, !iconName.isEmpty {
+            return iconName
+        }
+        return providerIconName(for: title)
+    }
+
     var body: some View {
         if displayedMetrics.isEmpty {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                // Section Header (タイトル保護と右側情報のスマート配置)
+                // Section Header (Control Center Module Header Style)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     HStack(spacing: 5) {
+                        Image(systemName: resolvedIconName)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 14)
+
                         Text(title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
@@ -1108,7 +1129,7 @@ struct ProviderUsageSection: View {
                     }
                     .layoutPriority(1)
 
-                    Spacer(minLength: 8)
+                    Spacer(minLength: 6)
 
                     if let resetInfo = activeResetString {
                         if usedCostUSD > 0 {
@@ -1138,21 +1159,26 @@ struct ProviderUsageSection: View {
                         PeriodLimitRowView(
                             metric: metric,
                             isHighlighted: highlightedPeriod == metric.period && selectedFilter == nil,
-                            unit: unit
+                            unit: unit,
+                            accent: accent
                         )
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8.5)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.6))
+                FrostedGlassCardBackground(
+                    cornerRadius: 12,
+                    accentTint: accent,
+                    isHovered: isHovered
+                )
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
-            )
+            .onHover { hovering in
+                withAnimation(.easeOut(duration: 0.14)) {
+                    isHovered = hovering
+                }
+            }
         }
     }
 }
@@ -1264,7 +1290,7 @@ func openSettingsWindow(openWindow: OpenWindowAction) {
     openWindow(id: "settings")
 }
 
-// MARK: - Main Card View (macOS Native HIG Design)
+// MARK: - Main Card View (macOS Tahoe Default App Liquid Glass Harmony)
 struct AIMeterCardView: View {
     @ObservedObject var monitor: UsageMonitor
     var isMenuBar: Bool = false
@@ -1290,12 +1316,12 @@ struct AIMeterCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Header (Finder / macOS Native Unified Toolbar Style)
+            // Header (Finder / Control Center Unified Liquid Glass Header)
             HStack(spacing: 8) {
                 if !isMenuBar {
                     // ネイティブ macOS トラフィックライト（赤・黄・緑の3連）用のインセット
                     Color.clear
-                        .frame(width: 72, height: 26)
+                        .frame(width: 70, height: 26)
                         .accessibilityHidden(true)
                 }
 
@@ -1305,101 +1331,51 @@ struct AIMeterCardView: View {
 
                 Spacer()
 
-                // macOS Native Capsule Toolbar Item Group (Finderスタイル・均等アイコン配置)
-                HStack(spacing: 2) {
-                    // 1. 要点 / 全枠 トグル (Finder表示切替スタイル)
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) {
+                // Native macOS Tahoe Liquid Glass Capsule Toolbar
+                LiquidGlassToolbarPill {
+                    // 1. 要点 / 全枠 トグル
+                    LiquidGlassToolbarIconButton(
+                        systemName: monitor.isDetailedView ? "list.bullet" : "sparkles.rectangle.stack",
+                        isActive: monitor.isDetailedView,
+                        helpText: monitor.isDetailedView ? "全枠表示中（クリックで要点表示に短縮）" : "要点表示中（クリックで全枠を表示）"
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.16)) {
                             monitor.isDetailedView.toggle()
                         }
-                    } label: {
-                        Image(systemName: monitor.isDetailedView ? "list.bullet" : "sparkles.rectangle.stack")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(monitor.isDetailedView ? Color.accentColor : Color.secondary)
-                            .frame(width: 24, height: 22)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .focusable(false)
-                    .help(monitor.isDetailedView ? "全枠表示中（クリックで要点表示に短縮）" : "要点表示中（クリックで全枠を表示）")
 
-                    Divider()
-                        .frame(height: 12)
-
-                    // 2. 更新ボタン (更新中はスピナー表示)
-                    Button {
+                    // 2. 更新ボタン
+                    LiquidGlassToolbarIconButton(
+                        systemName: "arrow.clockwise",
+                        isLoading: monitor.isRefreshing,
+                        helpText: "今すぐ更新"
+                    ) {
                         Task {
                             await monitor.refresh()
                         }
-                    } label: {
-                        Group {
-                            if monitor.isRefreshing {
-                                ProgressView()
-                                    .controlSize(.mini)
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(width: 24, height: 22)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .focusable(false)
-                    .disabled(monitor.isRefreshing)
-                    .help("今すぐ更新")
-                    .accessibilityLabel("今すぐ更新")
 
                     // 3. ウィジェット専用: 最前面ピン留めトグル
                     if !isMenuBar {
-                        Divider()
-                            .frame(height: 12)
-
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
+                        LiquidGlassToolbarIconButton(
+                            systemName: monitor.isWidgetPinned ? "pin.fill" : "pin",
+                            isActive: monitor.isWidgetPinned,
+                            helpText: monitor.isWidgetPinned ? "最前面固定中 (クリックで解除)" : "通常ウィンドウ (クリックで最前面固定)"
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.16)) {
                                 monitor.isWidgetPinned.toggle()
                             }
-                        } label: {
-                            Image(systemName: monitor.isWidgetPinned ? "pin.fill" : "pin")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(monitor.isWidgetPinned ? Color.accentColor : Color.secondary)
-                                .frame(width: 24, height: 22)
-                                .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
-                        .focusable(false)
-                        .help(monitor.isWidgetPinned ? "最前面固定中 (クリックで解除)" : "通常ウィンドウ (クリックで最前面固定)")
                     }
 
-                    Divider()
-                        .frame(height: 12)
-
-                    // 4. 設定ボタン (macOS標準設定ウィンドウを開く)
-                    Button {
+                    // 4. 設定ボタン
+                    LiquidGlassToolbarIconButton(
+                        systemName: "gearshape",
+                        helpText: "設定を開く (⌘,)"
+                    ) {
                         openSettingsWindow(openWindow: openWindow)
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 24, height: 22)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .focusable(false)
-                    .help("設定を開く (⌘,)")
-                    .accessibilityLabel("設定を開く")
                 }
-                .padding(.horizontal, 3)
-                .padding(.vertical, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.85))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
-                )
             }
             .frame(height: 26)
 
@@ -1417,8 +1393,7 @@ struct AIMeterCardView: View {
                     Button("設定を開く...") {
                         openSettingsWindow(openWindow: openWindow)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .buttonStyle(GlassCapsuleButtonStyle(isProminent: true))
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
@@ -1438,7 +1413,7 @@ struct AIMeterCardView: View {
                 providerSectionsStack
             }
 
-            // Quiet Footer
+            // Quiet Control Center Style Footer
             HStack {
                 Text("\(Self.timeFormatter.string(from: monitor.lastUpdated)) 更新")
                     .font(.caption2.monospacedDigit())
@@ -1458,43 +1433,20 @@ struct AIMeterCardView: View {
 
             if isMenuBar {
                 Divider()
-                HStack(spacing: 8) {
-                    Button(monitor.isDesktopWidgetOpen ? "ウィジェットを非表示" : "ウィジェットを表示") {
-                        if monitor.isDesktopWidgetOpen {
-                            closeDesktopWidgetWindow(monitor: monitor)
-                        } else {
-                            openOrRestoreDesktopWidgetWindow(monitor: monitor) { id in
-                                openWindow(id: id)
-                            }
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Spacer()
-
-                    Button("設定...") {
-                        openSettingsWindow(openWindow: openWindow)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Button("終了") {
-                        NSApplication.shared.terminate(nil)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
+                    .opacity(0.35)
+                menuBarFooterButtons
             }
         }
         .padding(.horizontal, 14)
         .padding(.top, isMenuBar ? 14 : 9)
         .padding(.bottom, 14)
         .frame(width: 348)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.3), lineWidth: 0.5)
+        .background(
+            LiquidGlassBackground(
+                cornerRadius: 18,
+                material: .popover,
+                blendingMode: .behindWindow
+            )
         )
         .background(
             Group {
@@ -1566,6 +1518,66 @@ struct AIMeterCardView: View {
     }
 
     @ViewBuilder
+    private var menuBarFooterButtons: some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button(monitor.isDesktopWidgetOpen ? "ウィジェットを非表示" : "ウィジェットを表示") {
+                        if monitor.isDesktopWidgetOpen {
+                            closeDesktopWidgetWindow(monitor: monitor)
+                        } else {
+                            openOrRestoreDesktopWidgetWindow(monitor: monitor) { id in
+                                openWindow(id: id)
+                            }
+                        }
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+
+                    Spacer()
+
+                    Button("設定...") {
+                        openSettingsWindow(openWindow: openWindow)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+
+                    Button("終了") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Button(monitor.isDesktopWidgetOpen ? "ウィジェットを非表示" : "ウィジェットを表示") {
+                    if monitor.isDesktopWidgetOpen {
+                        closeDesktopWidgetWindow(monitor: monitor)
+                    } else {
+                        openOrRestoreDesktopWidgetWindow(monitor: monitor) { id in
+                            openWindow(id: id)
+                        }
+                    }
+                }
+                .buttonStyle(GlassCapsuleButtonStyle(isSelected: monitor.isDesktopWidgetOpen))
+
+                Spacer()
+
+                Button("設定...") {
+                    openSettingsWindow(openWindow: openWindow)
+                }
+                .buttonStyle(GlassCapsuleButtonStyle())
+
+                Button("終了") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .buttonStyle(GlassCapsuleButtonStyle())
+            }
+        }
+    }
+
+    @ViewBuilder
     private var providerSectionsStack: some View {
         VStack(alignment: .leading, spacing: 6) {
             if monitor.showOpenAISection {
@@ -1577,7 +1589,8 @@ struct AIMeterCardView: View {
                     metrics: monitor.openaiMetrics,
                     highlightedPeriod: highlightedMenuBarPeriod,
                     unit: "tokens",
-                    isDetailed: monitor.isDetailedView
+                    isDetailed: monitor.isDetailedView,
+                    iconName: "brain.head.profile"
                 )
             }
 
@@ -1590,7 +1603,8 @@ struct AIMeterCardView: View {
                     metrics: monitor.geminiMetrics,
                     highlightedPeriod: highlightedMenuBarPeriod,
                     unit: "tokens",
-                    isDetailed: monitor.isDetailedView
+                    isDetailed: monitor.isDetailedView,
+                    iconName: "sparkle"
                 )
             }
 
@@ -1605,7 +1619,8 @@ struct AIMeterCardView: View {
                     metrics: monitor.metrics(for: sub),
                     highlightedPeriod: highlightedMenuBarPeriod,
                     unit: providerUnit(for: sub.id),
-                    isDetailed: monitor.isDetailedView
+                    isDetailed: monitor.isDetailedView,
+                    iconName: sub.iconName
                 )
             }
         }

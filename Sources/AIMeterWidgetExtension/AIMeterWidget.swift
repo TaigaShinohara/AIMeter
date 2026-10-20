@@ -37,6 +37,62 @@ struct AIMeterTimelineProvider: TimelineProvider {
     }
 }
 
+// MARK: - Widget Liquid Glass Progress Bar (macOS Default Widget Harmony)
+private struct WidgetLiquidProgressBar: View {
+    let ratio: Double
+    let color: Color
+    var height: CGFloat = 5.5
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let clamped = min(max(ratio, 0.0), 1.0)
+        GeometryReader { geo in
+            let w = max(height, geo.size.width * CGFloat(clamped))
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.primary.opacity(0.10))
+
+                ZStack(alignment: .top) {
+                    Capsule(style: .continuous)
+                        .fill(color)
+
+                    Capsule(style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(colorScheme == .dark ? 0.25 : 0.35), Color.clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(height: height * 0.5)
+                }
+                .frame(width: min(geo.size.width, w), height: height)
+            }
+        }
+        .frame(height: height)
+    }
+}
+
+private func widgetStatusColor(for remainingPct: Int) -> Color {
+    if remainingPct <= 15 {
+        return .red
+    } else if remainingPct <= 35 {
+        return .orange
+    } else {
+        return Color.primary.opacity(0.72)
+    }
+}
+
+private func widgetPercentColor(for remainingPct: Int) -> Color {
+    if remainingPct <= 15 {
+        return .red
+    } else if remainingPct <= 35 {
+        return .orange
+    } else {
+        return .primary
+    }
+}
+
 // MARK: - Small Widget View (最逼迫サービス)
 struct SmallWidgetView: View {
     let snapshot: AIMeterWidgetSnapshot
@@ -44,13 +100,13 @@ struct SmallWidgetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("AI Meter")
-                    .font(.system(size: 11, weight: .bold))
+                Text("AIMeter")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 if snapshot.totalCostUSD > 0 {
                     Text(String(format: "$%.1f", snapshot.totalCostUSD))
-                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                        .font(.caption2.weight(.medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
             }
@@ -60,43 +116,36 @@ struct SmallWidgetView: View {
 
                 HStack(spacing: 5) {
                     Image(systemName: item.iconName)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(statusColor(for: item.remainingPercent))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
                     Text(item.shortName)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                 }
 
                 HStack(alignment: .lastTextBaseline, spacing: 2) {
                     Text("\(item.remainingPercent)%")
-                        .font(.system(size: 28, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(statusColor(for: item.remainingPercent))
+                        .font(.system(size: 28, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(widgetPercentColor(for: item.remainingPercent))
                     Text("残")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
 
-                // Progress Bar
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.12))
-                            .frame(height: 5)
-                        Capsule()
-                            .fill(statusColor(for: item.remainingPercent))
-                            .frame(width: max(3, geo.size.width * CGFloat(item.remainingRatio)), height: 5)
-                    }
-                }
-                .frame(height: 5)
+                WidgetLiquidProgressBar(
+                    ratio: item.remainingRatio,
+                    color: widgetStatusColor(for: item.remainingPercent),
+                    height: 5.5
+                )
 
                 HStack {
                     Text("\(item.usedDisplay)/\(item.limitDisplay)")
-                        .font(.system(size: 9.5).monospacedDigit())
+                        .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                     Spacer()
                     if let reset = item.resetText {
                         Text(reset)
-                            .font(.system(size: 9.5, weight: .medium))
+                            .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -107,9 +156,9 @@ struct SmallWidgetView: View {
                 VStack(spacing: 4) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 20))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(.secondary)
                     Text("待機中")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
@@ -117,21 +166,7 @@ struct SmallWidgetView: View {
             }
         }
         .padding(12)
-        .containerBackground(for: .widget) {
-            Color.clear
-        }
-    }
-
-    private func statusColor(for remainingPct: Int) -> Color {
-        if remainingPct <= 15 {
-            return .red
-        } else if remainingPct <= 35 {
-            return .orange
-        } else if remainingPct <= 60 {
-            return .yellow
-        } else {
-            return .green
-        }
+        .containerBackground(.ultraThinMaterial, for: .widget)
     }
 }
 
@@ -143,30 +178,31 @@ struct MediumWidgetView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Header
             HStack {
-                Label("AI Meter", systemImage: "speedometer")
-                    .font(.system(size: 11.5, weight: .bold))
+                Label("AIMeter", systemImage: "gauge.with.needle")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.primary)
 
                 Spacer()
 
                 if snapshot.totalCostUSD > 0 {
-                    Text(String(format: "API換算: $%.2f", snapshot.totalCostUSD))
-                        .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                    Text(String(format: "API換算 $%.2f", snapshot.totalCostUSD))
+                        .font(.caption2.weight(.medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
 
                 Text(Self.timeFormatter.string(from: snapshot.updatedAt))
-                    .font(.system(size: 9.5).monospacedDigit())
+                    .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
 
             Divider()
+                .opacity(0.35)
 
             // Service Bars
             if snapshot.topServices.isEmpty {
                 Spacer()
                 Text("利用可能なデータがありません")
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                 Spacer()
@@ -177,35 +213,28 @@ struct MediumWidgetView: View {
                             HStack(spacing: 4) {
                                 Image(systemName: item.iconName)
                                     .font(.system(size: 11))
-                                    .foregroundStyle(statusColor(for: item.remainingPercent))
+                                    .foregroundStyle(.secondary)
                                     .frame(width: 14)
                                 Text(item.shortName)
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(.caption.weight(.semibold))
                                     .frame(width: 44, alignment: .leading)
                             }
 
-                            // Progress Bar
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule()
-                                        .fill(Color.primary.opacity(0.12))
-                                        .frame(height: 6)
-                                    Capsule()
-                                        .fill(statusColor(for: item.remainingPercent))
-                                        .frame(width: max(3, geo.size.width * CGFloat(item.remainingRatio)), height: 6)
-                                }
-                            }
-                            .frame(height: 6)
+                            WidgetLiquidProgressBar(
+                                ratio: item.remainingRatio,
+                                color: widgetStatusColor(for: item.remainingPercent),
+                                height: 5.5
+                            )
 
                             // Percent & Counts
                             HStack(spacing: 4) {
                                 Text("\(item.remainingPercent)%")
-                                    .font(.system(size: 11, weight: .bold, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(statusColor(for: item.remainingPercent))
+                                    .font(.caption.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(widgetPercentColor(for: item.remainingPercent))
                                     .frame(width: 32, alignment: .trailing)
 
                                 Text("(\(item.usedDisplay)/\(item.limitDisplay))")
-                                    .font(.system(size: 9.5).monospacedDigit())
+                                    .font(.caption2.monospacedDigit())
                                     .foregroundStyle(.secondary)
                                     .frame(width: 70, alignment: .trailing)
                             }
@@ -215,9 +244,7 @@ struct MediumWidgetView: View {
             }
         }
         .padding(12)
-        .containerBackground(for: .widget) {
-            Color.clear
-        }
+        .containerBackground(.ultraThinMaterial, for: .widget)
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -225,18 +252,6 @@ struct MediumWidgetView: View {
         f.dateFormat = "HH:mm"
         return f
     }()
-
-    private func statusColor(for remainingPct: Int) -> Color {
-        if remainingPct <= 15 {
-            return .red
-        } else if remainingPct <= 35 {
-            return .orange
-        } else if remainingPct <= 60 {
-            return .yellow
-        } else {
-            return .green
-        }
-    }
 }
 
 // MARK: - Large Widget View (全サービス詳細)
@@ -244,29 +259,30 @@ struct LargeWidgetView: View {
     let snapshot: AIMeterWidgetSnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 9) {
             // Header
             HStack {
-                Label("AI Meter Status", systemImage: "speedometer")
-                    .font(.system(size: 12.5, weight: .bold))
+                Label("AIMeter", systemImage: "gauge.with.needle")
+                    .font(.subheadline.weight(.semibold))
                 Spacer()
                 if snapshot.totalCostUSD > 0 {
-                    Text(String(format: "API換算合計: $%.2f", snapshot.totalCostUSD))
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    Text(String(format: "API換算 $%.2f", snapshot.totalCostUSD))
+                        .font(.caption.weight(.medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
                 Text("\(Self.timeFormatter.string(from: snapshot.updatedAt)) 更新")
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
 
             Divider()
+                .opacity(0.35)
 
             // Service Grid / Rows
             if snapshot.allServices.isEmpty {
                 Spacer()
                 Text("監視対象のサービスが設定されていません")
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                 Spacer()
@@ -277,42 +293,35 @@ struct LargeWidgetView: View {
                             HStack(spacing: 5) {
                                 Image(systemName: item.iconName)
                                     .font(.system(size: 11.5))
-                                    .foregroundStyle(statusColor(for: item.remainingPercent))
+                                    .foregroundStyle(.secondary)
                                     .frame(width: 16)
                                 Text(item.name)
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.caption.weight(.medium))
                                     .lineLimit(1)
                                     .frame(width: 100, alignment: .leading)
                             }
 
-                            // Progress
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule()
-                                        .fill(Color.primary.opacity(0.12))
-                                        .frame(height: 6)
-                                    Capsule()
-                                        .fill(statusColor(for: item.remainingPercent))
-                                        .frame(width: max(3, geo.size.width * CGFloat(item.remainingRatio)), height: 6)
-                                }
-                            }
-                            .frame(height: 6)
+                            WidgetLiquidProgressBar(
+                                ratio: item.remainingRatio,
+                                color: widgetStatusColor(for: item.remainingPercent),
+                                height: 5.5
+                            )
 
                             // Status Details
                             HStack(spacing: 6) {
                                 Text("\(item.remainingPercent)%")
-                                    .font(.system(size: 11.5, weight: .bold, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(statusColor(for: item.remainingPercent))
+                                    .font(.caption.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(widgetPercentColor(for: item.remainingPercent))
                                     .frame(width: 34, alignment: .trailing)
 
                                 Text("\(item.usedDisplay)/\(item.limitDisplay) \(item.unit)")
-                                    .font(.system(size: 9.5).monospacedDigit())
+                                    .font(.caption2.monospacedDigit())
                                     .foregroundStyle(.secondary)
                                     .frame(width: 85, alignment: .trailing)
 
                                 if let reset = item.resetText {
                                     Text(reset)
-                                        .font(.system(size: 9.5))
+                                        .font(.caption2)
                                         .foregroundStyle(.tertiary)
                                         .frame(width: 60, alignment: .trailing)
                                 }
@@ -325,9 +334,7 @@ struct LargeWidgetView: View {
             Spacer()
         }
         .padding(14)
-        .containerBackground(for: .widget) {
-            Color.clear
-        }
+        .containerBackground(.ultraThinMaterial, for: .widget)
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -335,18 +342,6 @@ struct LargeWidgetView: View {
         f.dateFormat = "HH:mm"
         return f
     }()
-
-    private func statusColor(for remainingPct: Int) -> Color {
-        if remainingPct <= 15 {
-            return .red
-        } else if remainingPct <= 35 {
-            return .orange
-        } else if remainingPct <= 60 {
-            return .yellow
-        } else {
-            return .green
-        }
-    }
 }
 
 // MARK: - Entry View Router

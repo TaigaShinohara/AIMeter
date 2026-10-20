@@ -94,43 +94,40 @@ struct HelpView: View {
                         Image(systemName: "chevron.left")
                         Text("戻る")
                     }
+                    .font(.system(size: 11.5, weight: .semibold))
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(GlassCapsuleButtonStyle())
 
                 Text("ヘルプ & よくある質問")
-                    .font(.headline)
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
 
                 Spacer()
 
-                Text("v1.2")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                LiquidGlassBadge(text: "v1.2 Liquid Glass", icon: "sparkles", tint: .accentColor)
             }
 
             // About AIMeter Card
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Image(systemName: "gauge.with.needle.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.tint)
+            HStack(alignment: .top, spacing: 10) {
+                LiquidGlassIconOrb(
+                    systemName: "gauge.with.needle.fill",
+                    accent: .accentColor,
+                    size: 28,
+                    iconSize: 14
+                )
+
+                VStack(alignment: .leading, spacing: 4) {
                     Text("AIMeter について")
                         .font(.system(size: 12.5, weight: .bold))
-                }
 
-                Text("Mac 内で利用中の各 AI ツール（Cursor, Windsurf, Claude Code, GitHub Copilot, Gemini, OpenAI 等）のローカルログを直接解析し、リアルタイムの使用量・残量メーターとAPI換算コストを可視化するメニューバー＆ウィジェットアプリです。")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .lineSpacing(2.5)
+                    Text("Mac 内で利用中の各 AI ツール（Cursor, Windsurf, Claude Code, GitHub Copilot, Gemini, OpenAI 等）のローカルログを直接解析し、リアルタイムの使用量・残量メーターとAPI換算コストを可視化するメニューバー＆ウィジェットアプリです。")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(2.5)
+                }
             }
-            .padding(10)
+            .padding(11)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.06))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.accentColor.opacity(0.15), lineWidth: 0.5)
-                    )
+                FrostedGlassCardBackground(cornerRadius: 12, accentTint: .accentColor)
             )
 
             // Search Filter
@@ -154,10 +151,9 @@ struct HelpView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(0.05))
+                FrostedGlassCardBackground(cornerRadius: 9)
             )
 
             // Q&A List
@@ -197,7 +193,7 @@ struct HelpView: View {
             } label: {
                 HStack(alignment: .top, spacing: 7) {
                     Text("Q.")
-                        .font(.system(size: 13.5, weight: .bold))
+                        .font(.system(size: 13.5, weight: .bold, design: .rounded))
                         .foregroundStyle(.tint)
 
                     Text(item.question)
@@ -219,7 +215,7 @@ struct HelpView: View {
             if isExpanded {
                 HStack(alignment: .top, spacing: 7) {
                     Text("A.")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
 
                     Text(item.answer)
@@ -233,12 +229,7 @@ struct HelpView: View {
         }
         .padding(11)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.03))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
-                )
+            FrostedGlassCardBackground(cornerRadius: 11)
         )
     }
 }
