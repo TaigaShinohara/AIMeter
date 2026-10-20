@@ -31,7 +31,10 @@ class ReleaseTests(unittest.TestCase):
         if args[0] == "/usr/bin/lipo":
             return "arm64 x86_64\n"
         if args[0] == "/usr/bin/otool":
-            return "binary:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n"
+            return ("/tmp/build/binary (architecture arm64):\n"
+                    "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n")
+        if "vtool" in args:
+            return "    minos 14.0\n    minos 14.0\n"
         return ""
 
     def package(self):
@@ -68,9 +71,18 @@ class ReleaseTests(unittest.TestCase):
     def test_build_machine_library_dependency_is_rejected(self, command):
         command.side_effect = lambda *args, **kw: (
             "arm64 x86_64" if args[0].endswith("lipo") else
+            "    minos 14.0\n    minos 14.0\n" if "vtool" in args else
             "binary:\n\t/opt/homebrew/lib/private.dylib (compatibility version 1)\n"
         )
         with self.assertRaisesRegex(ValueError, "Non-system"):
+            self.package()
+
+    @patch.object(release, "run")
+    def test_newer_macho_target_cannot_claim_macos_14_support(self, command):
+        command.side_effect = lambda *args, **kw: (
+            "    minos 27.0\n    minos 27.0\n" if "vtool" in args else self.command(*args, **kw)
+        )
+        with self.assertRaisesRegex(ValueError, "Both Mach-O"):
             self.package()
 
     @patch.object(release, "run")
@@ -119,6 +131,41 @@ class ReleaseTests(unittest.TestCase):
         self.assertFalse((self.root / "release.json").exists())
         self.assertFalse(list(self.root.glob("AIMeter-*.zip")))
         self.assertFalse(any("stapler" in call.args for call in command.call_args_list))
+
+    @patch.object(release, "check_identity")
+    @patch.object(release, "verify_signature")
+    @patch.object(release, "run")
+    def test_gatekeeper_rejection_after_apple_acceptance_blocks_release(self, command, signature, identity):
+        command.side_effect = self.command
+        self.package()
+        release.write_json(self.root / "build.json",
+                           {"version": "1.1.1", "build_number": "3", "commit": "b" * 40})
+
+        def reject_gatekeeper(*args, **kwargs):
+            if "notarytool" in args:
+                return json.dumps({"status": "Accepted", "id": "synthetic-submission"})
+            if args[0].endswith("spctl"):
+                raise subprocess.CalledProcessError(1, args)
+            return self.command(*args, **kwargs)
+
+        command.side_effect = reject_gatekeeper
+        with self.assertRaises(subprocess.CalledProcessError):
+            release.notarize(self.root, FINGERPRINT, TEAM, "synthetic-profile")
+        self.assertFalse((self.root / "release.json").exists())
+        self.assertFalse(list(self.root.glob("AIMeter-*.zip")))
+
+    @patch.object(release, "run")
+    @patch.object(release.subprocess, "run")
+    def test_signature_requires_team_timestamp_and_runtime(self, process, command):
+        valid = (f"TeamIdentifier={TEAM}\nAuthority=Developer ID Application: Example\n"
+                 "Timestamp=Oct 20, 2026\nflags=0x10000(runtime)\n")
+        for removed in (f"TeamIdentifier={TEAM}\n", "Timestamp=Oct 20, 2026\n",
+                        "flags=0x10000(runtime)\n", "Authority=Developer ID Application: Example\n"):
+            process.return_value = subprocess.CompletedProcess([], 0, "", valid.replace(removed, ""))
+            with self.assertRaisesRegex(ValueError, "Missing Developer ID"):
+                release.verify_signature(self.app, TEAM)
+        process.return_value = subprocess.CompletedProcess([], 0, "", valid)
+        release.verify_signature(self.app, TEAM)
 
     def receipt(self):
         archive = self.root / "AIMeter-1.1.1-macos-universal.zip"

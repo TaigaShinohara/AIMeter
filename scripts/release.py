@@ -73,10 +73,15 @@ def verify_bundle(app, version, build_number):
         actual = set(run("/usr/bin/lipo", "-archs", binary).split())
         if actual != ARCHITECTURES:
             raise ValueError("App and widget must both contain arm64 and x86_64.")
+        minimums = re.findall(r"^\s+minos\s+(\S+)", run(
+            "/usr/bin/xcrun", "vtool", "-show-build", binary), re.MULTILINE)
+        if minimums != ["14.0", "14.0"]:
+            raise ValueError("Both Mach-O slices must target macOS 14.0.")
         # Reject accidental dependencies on build-machine libraries.
         for line in run("/usr/bin/otool", "-L", binary).splitlines():
             dependency = line.strip().split(" (", 1)[0]
-            if " (" in line and not dependency.startswith(("/System/Library/", "/usr/lib/")):
+            if line.startswith(("\t", " ")) and " (" in line and not dependency.startswith(
+                    ("/System/Library/", "/usr/lib/")):
                 raise ValueError("Non-system library dependency: " + dependency)
 
 
