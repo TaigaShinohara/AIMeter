@@ -8,6 +8,16 @@
 現在の公開対象はソースコードです。署名・公証済みの公式バイナリは提供していません。
 ビルド環境とテスト方法は [README](README.md) を参照してください。
 
+公式バイナリの公開先は [GitHub Releases](https://github.com/TaigaShinohara/AIMeter/releases) です。
+初回公開後は `AIMeter-<version>-macos-universal.zip` をダウンロード・展開し、
+`AIMeter.app` をアプリケーションフォルダへ移動してFinderから開きます。
+この配布版にXcodeやPythonのインストールは不要です。
+署名や公証に関する警告が出た場合は、そのReleaseのURLとエラー文を報告してください。
+セキュリティ設定を無効化して開く必要はありません。
+
+配布担当者は [署名・公証・公開手順](docs/RELEASING.md) を使用します。
+以下の開発用スクリプトが生成するZIPはGitHub Releasesにアップロードしないでください。
+
 `scripts/build_app.sh` はローカルに `AIMeter.app` と `AIMeter-macos-universal.zip` を生成します。
 ZIP名に `universal` が含まれますが、スクリプトはビルド先アーキテクチャを明示しておらず、
 両アーキテクチャの収録を保証しません。通常のアプリ動作にPythonは不要です。

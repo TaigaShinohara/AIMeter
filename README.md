@@ -12,7 +12,11 @@ Codex、Gemini / Antigravity、Claude Code、Grok Bot、GitHub Copilot、Windsur
 - 通常のアプリ動作にPythonは不要。旧収集スクリプトのテストにはPython 3.9以降を使用
 
 Apple Silicon環境でビルドと合成データによるテストを確認しています。
-このリポジトリはソースコードの公開です。署名・公証済みの配布バイナリや、Universal Binaryの検証を提供するものではありません。
+一般ユーザー向けの配布先は [GitHub Releases](https://github.com/TaigaShinohara/AIMeter/releases) です。
+現在は配布準備段階で、署名・公証済みバイナリの初回公開はまだ行っていません。
+公開後はReleaseに添付された `AIMeter-<version>-macos-universal.zip` を展開し、
+`AIMeter.app` をアプリケーションフォルダへ移動して開きます。
+ソースコードのZIPはアプリ本体ではありません。
 
 ## ビルドとテスト
 
@@ -31,6 +35,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Tests -p 'test_*.py' -
 `/Applications` が書込み可能な場合は既存の `AIMeter.app` を更新してWidgetを登録します。
 `./run.sh`、`make run`、`Launch AIMeter.command` も必要に応じてこのビルド処理を実行し、アプリを起動します。
 手順と機能は [配布・導入ガイド](DISTRIBUTION_GUIDE.md) を参照してください。
+署名・公証・GitHub Releases公開の手動手順は [リリース担当者向けガイド](docs/RELEASING.md) にあります。
 
 ## データと通信
 
