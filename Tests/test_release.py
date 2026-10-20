@@ -218,8 +218,11 @@ class ReleaseTests(unittest.TestCase):
         def mismatch(*args, **kwargs):
             if any("matching-refs" in str(arg) for arg in args):
                 return "[]"
-            if args[:2] == ("gh", "api"):
-                return json.dumps({"assets": [{"name": archive.name, "digest": "sha256:wrong"}]})
+            if args[:3] == ("gh", "release", "view"):
+                return json.dumps({
+                    "isDraft": True, "tagName": "v1.1.1", "targetCommitish": "b" * 40,
+                    "assets": [{"name": archive.name, "digest": "sha256:wrong"}],
+                })
             return ""
 
         command.side_effect = mismatch
@@ -227,6 +230,64 @@ class ReleaseTests(unittest.TestCase):
             release.publish(self.root, self.notes)
         self.assertTrue(any(call.args[:3] == ("gh", "release", "create")
                             for call in command.call_args_list))
+        self.assertFalse(any(call.args[:3] == ("gh", "release", "edit")
+                             for call in command.call_args_list))
+
+    @patch.object(release, "validate_release")
+    @patch.object(release, "run")
+    def test_draft_without_git_tag_publishes_only_after_both_digests_match(self, command, validation):
+        archive = self.receipt()
+        validation.return_value = json.loads((self.root / "release.json").read_text())
+        state = {"draft": True, "checked": False}
+
+        def github(*args, **kwargs):
+            if any("matching-refs" in str(arg) for arg in args):
+                return "[]"
+            if args[:2] == ("gh", "api"):
+                # GitHub's by-tag REST endpoint cannot resolve this untagged draft.
+                raise subprocess.CalledProcessError(1, args, stderr="Not Found (HTTP 404)")
+            if args[:3] == ("gh", "release", "view"):
+                state["checked"] = True
+                return json.dumps({
+                    "isDraft": state["draft"], "tagName": "v1.1.1",
+                    "targetCommitish": "b" * 40,
+                    "url": "https://github.com/example/project/releases/tag/v1.1.1",
+                    "assets": [
+                        {"name": p.name, "digest": "sha256:" + release.sha256(p)}
+                        for p in (archive, self.root / "SHA256SUMS")
+                    ],
+                })
+            if args[:3] == ("gh", "release", "edit"):
+                self.assertTrue(state["checked"])
+                state["draft"] = False
+            return ""
+
+        command.side_effect = github
+        release.publish(self.root, self.notes)
+        self.assertFalse(state["draft"])
+        self.assertEqual(sum(call.args[:3] == ("gh", "release", "create")
+                             for call in command.call_args_list), 1)
+        self.assertEqual(sum(call.args[:3] == ("gh", "release", "view")
+                             for call in command.call_args_list), 2)
+
+    @patch.object(release, "validate_release")
+    @patch.object(release, "run")
+    def test_unexpected_draft_source_cannot_be_published(self, command, validation):
+        self.receipt()
+        validation.return_value = json.loads((self.root / "release.json").read_text())
+
+        def wrong_source(*args, **kwargs):
+            if any("matching-refs" in str(arg) for arg in args):
+                return "[]"
+            if args[:3] == ("gh", "release", "view"):
+                return json.dumps({
+                    "isDraft": True, "tagName": "v1.1.1", "targetCommitish": "c" * 40,
+                })
+            return ""
+
+        command.side_effect = wrong_source
+        with self.assertRaisesRegex(ValueError, "Unexpected draft"):
+            release.publish(self.root, self.notes)
         self.assertFalse(any(call.args[:3] == ("gh", "release", "edit")
                              for call in command.call_args_list))
 

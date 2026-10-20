@@ -2,13 +2,19 @@
 
 この手順はリリース担当者向けです。配布物はmacOS 14以降向けのUniversal
 Binary（arm64 / x86_64）です。一般ユーザーはビルド用ツールを必要としません。
-初回のDeveloper ID証明書・公証認証の設定と、実際の署名・公証・初回公開はまだ完了していません。
+2026-10-20に初回設定・署名・公証を完了し、
+[v1.1.1](https://github.com/TaigaShinohara/AIMeter/releases/tag/v1.1.1) を公開しました。
+実機確認を含む検証範囲と未確認事項は、そのReleaseのノートに記録しています。
 
 ## 初回設定
 
 1. Apple Developer Programの有効なチームで、XcodeのSettings → Apple Accountsにサインインします。
 2. Manage Certificatesで **Developer ID Application** 証明書と秘密鍵をこのMacに用意します。
    Apple Development / Apple Distribution / ad-hoc署名はこの配布には使えません。
+   Webで作成する場合は、Keychain AccessでCSRを保存し、Apple Developerの
+   Certificates → ＋ → Developer ID Application → G2からCSRを登録します。
+   発行後の種類がDeveloper ID Applicationであることを確認し、
+   ダウンロードした `.cer` をCSR作成時と同じMacのログインキーチェーンへ追加します。
 3. `security find-identity -v -p codesigning` で証明書のSHA-1とTeam IDを確認します。
 4. 公証用認証をKeychainに登録します。次のコマンドはApple ID、Team ID、
    App用パスワードを対話的に入力するため、秘密値をコマンド引数や履歴に残しません。
@@ -102,7 +108,9 @@ python3 scripts/release.py publish \
 
 公開前に、配布ZIPのハッシュと展開後のappの署名・公証・Gatekeeperを再検証し、
 ソースSHAがGitHubのmainへマージ済みであることを確認します。
-タグ `v<version>` とdraft Releaseを作り、GitHub側のasset digestがローカルのSHA-256に
+タグ名 `v<version>` を指定したdraft Releaseを作り、GitHub側のasset digestがローカルのSHA-256に
 一致した場合だけ公開します。既存タグ・Release・assetを上書きしません。
+draftの段階ではGitタグが未作成の場合があるため、状態とassetの取得には
+`gh release view` を使います。タグ経由のREST APIはこの段階で404になることがあります。
 アップロード途中で失敗した場合はdraftが残る場合があります。GitHubでそのdraftとassetを
 確認し、再開または新versionで作り直してください。自動削除・自動上書きは行いません。
