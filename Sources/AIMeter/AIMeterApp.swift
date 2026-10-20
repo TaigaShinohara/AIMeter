@@ -193,6 +193,7 @@ final class UsageMonitor: ObservableObject {
 
     @Published var lastUpdated: Date = Date()
     @Published var isRefreshing: Bool = false
+    @Published var collectionError: String?
 
     private var timer: Timer?
     private var wakeObserver: NSObjectProtocol?
@@ -573,15 +574,26 @@ final class UsageMonitor: ObservableObject {
     func refresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
+        collectionError = nil
         sanitizeSettings()
         defer {
-            lastUpdated = Date()
+            if collectionError == nil { lastUpdated = Date() }
             isRefreshing = false
             SharedStore.reloadWidgetTimelines()
         }
 
-        await runLocalCollectorScript()
+        let error = await RefreshSequence.run(local: {
+            try await runLocalCollectorScript()
+            applyLocalSnapshot()
+        }, remote: {
+            await refreshConfiguredAPIs()
+        })
+        if let error {
+            collectionError = "収集エラー: \(error.localizedDescription)"
+        }
+    }
 
+    private func applyLocalSnapshot() {
         let localData = loadLocalJSON()
         if let localData {
             let monthlyOpenAI = max(0, localData.openaiUsedByPeriod?.monthly ?? localData.openaiUsedTokens ?? 0)
@@ -668,6 +680,9 @@ final class UsageMonitor: ObservableObject {
             geminiStatus = "未取得"
         }
 
+    }
+
+    private func refreshConfiguredAPIs() async {
         let trimmedOpenAIKey = openaiAdminKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedOpenAIKey.isEmpty {
             await fetchOpenAIUsage(apiKey: trimmedOpenAIKey)
@@ -679,15 +694,14 @@ final class UsageMonitor: ObservableObject {
         }
     }
 
-    private func runLocalCollectorScript() async {
+    private func runLocalCollectorScript() async throws {
         // Collect natively in Swift with zero external Python dependency
-        await LocalUsageCollector.collectAndSave(customPaths: customProviderPaths)
+        try await LocalUsageCollector.collectAndSave(customPaths: customProviderPaths)
     }
 
     func loadLocalJSON(from customURL: URL? = nil) -> LocalUsageData? {
         let url = customURL ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ai_meter_usage.json")
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(LocalUsageData.self, from: data)
+        return SharedStore.loadLocalUsageData(from: url)
     }
 
     private func fetchOpenAIUsage(apiKey: String) async {
@@ -708,14 +722,9 @@ final class UsageMonitor: ObservableObject {
                 limit: 31
             )
 
-            var monthTotal = 0
-            var weekTotal = 0
-            var dayTotal = 0
-            for b in dailyBuckets {
-                if b.startTime >= monthStart { monthTotal += b.tokens }
-                if b.startTime >= weekStart { weekTotal += b.tokens }
-                if b.startTime >= dayStart { dayTotal += b.tokens }
-            }
+            let monthTotal = try UsageParser.totalTokens(in: dailyBuckets, since: monthStart)
+            let weekTotal = try UsageParser.totalTokens(in: dailyBuckets, since: weekStart)
+            let dayTotal = try UsageParser.totalTokens(in: dailyBuckets, since: dayStart)
             self.openaiUsedTokens = monthTotal
             self.openaiUsedWeekly = weekTotal
             self.openaiUsedDaily = dayTotal
@@ -726,8 +735,10 @@ final class UsageMonitor: ObservableObject {
                 bucketWidth: "1h",
                 limit: 6
             ) {
-                self.openaiUsed5h = hourlyBuckets.reduce(0) { $0 + $1.tokens }
-                self.openaiUsed2h = hourlyBuckets.filter { $0.startTime >= twoHoursStart }.reduce(0) { $0 + $1.tokens }
+                let fiveHourTotal = try UsageParser.totalTokens(in: hourlyBuckets)
+                let twoHourTotal = try UsageParser.totalTokens(in: hourlyBuckets, since: twoHoursStart)
+                self.openaiUsed5h = fiveHourTotal
+                self.openaiUsed2h = twoHourTotal
             }
 
             if let totalCost = try? await fetchPaginatedOpenAICosts(apiKey: apiKey, startTime: monthStart) {
@@ -807,7 +818,7 @@ final class UsageMonitor: ObservableObject {
             }
 
             let parsed = try UsageParser.parseOpenAICostsPage(data: data)
-            totalCost += parsed.costUSD
+            totalCost = try UsageNumber.add(totalCost, parsed.costUSD)
             nextPage = parsed.nextPage
         } while nextPage != nil && pageCount < 10
 
@@ -1003,7 +1014,7 @@ struct PeriodLimitRowView: View {
     var body: some View {
         let ratio = metric.remainingRatio
         let pct = metric.remainingPercent
-        let usageText = formatCompactUsage(metric.remainingTokens, unit: unit)
+        let usageText = metric.isValid ? formatCompactUsage(metric.remainingTokens, unit: unit) : "数値エラー"
 
         HStack(spacing: 8) {
             // 1. Period Label
@@ -1411,6 +1422,13 @@ struct AIMeterCardView: View {
                 .frame(maxHeight: 520)
             } else {
                 providerSectionsStack
+            }
+
+            if let error = monitor.collectionError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // Quiet Control Center Style Footer

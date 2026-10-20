@@ -145,8 +145,10 @@ public enum SharedStore {
 
     public static func loadLocalUsageData(from customURL: URL? = nil) -> LocalUsageData? {
         let url = customURL ?? localUsageFileURL
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(LocalUsageData.self, from: data)
+        guard let data = try? BoundedInput().data(at: url),
+              let snapshot = try? JSONDecoder().decode(LocalUsageData.self, from: data),
+              (try? snapshot.validateNumbers()) != nil else { return nil }
+        return snapshot
     }
 
     public static func loadCustomSubscriptionsFromUserDefaults() -> [CustomSubscriptionConfig] {
@@ -165,7 +167,7 @@ public enum SharedStore {
     }
 
     /// Builds a snapshot from the current local file and subscription configurations.
-    public static func createCurrentSnapshot(customURL: URL? = nil) -> AIMeterWidgetSnapshot {
+    public static func createCurrentSnapshot(customURL: URL? = nil, subscriptions suppliedSubscriptions: [CustomSubscriptionConfig]? = nil, openaiLimit5h: Int? = nil) -> AIMeterWidgetSnapshot {
         guard let data = loadLocalUsageData(from: customURL) else {
             return AIMeterWidgetSnapshot(
                 mostCriticalService: nil,
@@ -177,7 +179,7 @@ public enum SharedStore {
             )
         }
 
-        var subscriptions = loadCustomSubscriptionsFromUserDefaults()
+        var subscriptions = suppliedSubscriptions ?? loadCustomSubscriptionsFromUserDefaults()
         if subscriptions.isEmpty {
             // Provide sensible defaults if not set yet
             subscriptions = [
@@ -197,7 +199,8 @@ public enum SharedStore {
 
         // Process OpenAI / Codex
         let oaiUsed5h = data.openaiUsedByPeriod?.fiveHours ?? 0
-        let oaiLimit5h = UserDefaults.standard.integer(forKey: "openaiTokenLimit5h") > 0 ? UserDefaults.standard.integer(forKey: "openaiTokenLimit5h") : 40_000_000
+        let configuredLimit = openaiLimit5h ?? UserDefaults.standard.integer(forKey: "openaiTokenLimit5h")
+        let oaiLimit5h = configuredLimit > 0 ? configuredLimit : 40_000_000
         let oaiMetric = PeriodUsageMetric(
             period: .fiveHours,
             usedTokens: oaiUsed5h,
@@ -214,7 +217,7 @@ public enum SharedStore {
             remainingRatio: oaiMetric.remainingRatio,
             usedTokens: oaiUsed5h,
             limitTokens: oaiMetric.effectiveLimitTokens,
-            usedDisplay: formatCompactTokenCount(oaiUsed5h),
+            usedDisplay: oaiMetric.isValid ? formatCompactTokenCount(oaiUsed5h) : "数値エラー",
             limitDisplay: formatCompactTokenCount(oaiMetric.effectiveLimitTokens),
             unit: "tokens",
             bottleneckPeriod: .fiveHours,
@@ -300,7 +303,7 @@ public enum SharedStore {
                         remainingRatio: bMetric.remainingRatio,
                         usedTokens: bMetric.usedTokens,
                         limitTokens: bMetric.effectiveLimitTokens,
-                        usedDisplay: formatCompactUsage(bMetric.usedTokens, unit: u),
+                        usedDisplay: bMetric.isValid ? formatCompactUsage(bMetric.usedTokens, unit: u) : "数値エラー",
                         limitDisplay: formatCompactUsage(bMetric.effectiveLimitTokens, unit: u),
                         unit: u,
                         bottleneckPeriod: bMetric.period,

@@ -140,6 +140,7 @@ private struct ServicesSettingsView: View {
     @ObservedObject var monitor: UsageMonitor
     @Binding var selectedServiceId: String
 
+    @StateObject private var pathValidator = PathValidation()
     @State private var pathInputs: [String: String] = [:]
     @State private var pathValidationResults: [String: LocalUsageCollector.ProviderPathScanResult] = [:]
     @State private var revealAdminKey: Bool = false
@@ -281,6 +282,8 @@ private struct ServicesSettingsView: View {
                 .frame(minWidth: 360)
         }
         .navigationTitle("サービス連携")
+        .onDisappear { pathValidator.cancel() }
+        .onChange(of: selectedServiceId) { _, _ in pathValidator.cancel() }
     }
 
     @ViewBuilder
@@ -424,7 +427,7 @@ private struct ServicesSettingsView: View {
         let currentSaved = monitor.customProviderPaths[serviceId]
         let inputBinding = Binding<String>(
             get: { pathInputs[serviceId] ?? currentSaved ?? "" },
-            set: { pathInputs[serviceId] = $0 }
+            set: { pathValidator.cancel(); pathInputs[serviceId] = $0 }
         )
 
         VStack(alignment: .leading, spacing: 8) {
@@ -454,6 +457,7 @@ private struct ServicesSettingsView: View {
 
                 if currentSaved != nil {
                     Button("リセット") {
+                        pathValidator.cancel()
                         monitor.setCustomPath(for: serviceId, path: "")
                         pathInputs[serviceId] = ""
                         pathValidationResults.removeValue(forKey: serviceId)
@@ -463,6 +467,13 @@ private struct ServicesSettingsView: View {
                 }
             }
 
+            if pathValidator.isRunning {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("ログを検証中…")
+                    Button("中止") { pathValidator.cancel() }
+                }
+            }
             if let result = pathValidationResults[serviceId] {
                 HStack(spacing: 4) {
                     Image(systemName: result.isValid ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
@@ -475,6 +486,7 @@ private struct ServicesSettingsView: View {
     }
 
     private func applyCustomPath(for serviceId: String, path: String) {
+        pathValidator.cancel()
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             monitor.setCustomPath(for: serviceId, path: "")
@@ -482,11 +494,13 @@ private struct ServicesSettingsView: View {
             Task { await monitor.refresh() }
             return
         }
-        let res = LocalUsageCollector.validateAndScan(providerId: serviceId, path: trimmed)
-        pathValidationResults[serviceId] = res
-        if res.isValid {
-            monitor.setCustomPath(for: serviceId, path: trimmed)
-            Task { await monitor.refresh() }
+        pathValidationResults.removeValue(forKey: serviceId)
+        pathValidator.start(provider: serviceId, path: trimmed) { res in
+            pathValidationResults[serviceId] = res
+            if res.isValid {
+                monitor.setCustomPath(for: serviceId, path: trimmed)
+                Task { await monitor.refresh() }
+            }
         }
     }
 }

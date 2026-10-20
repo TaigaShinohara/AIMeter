@@ -8,6 +8,7 @@ struct SetupWizardView: View {
     var onOpenHelp: (() -> Void)? = nil
     var onComplete: () -> Void
 
+    @StateObject private var pathValidator = PathValidation()
     @State private var isScanning: Bool = false
     @State private var activePathPickerProviderId: String? = nil
     @State private var customPathInput: String = ""
@@ -196,6 +197,7 @@ struct SetupWizardView: View {
                 monitor.autoAddDetectedSubscriptions()
             }
         }
+        .onDisappear { pathValidator.cancel() }
     }
 
     // MARK: - Row View for Standard Services
@@ -251,6 +253,7 @@ struct SetupWizardView: View {
 
                 // Manual Path Button
                 Button {
+                    pathValidator.cancel()
                     if activePathPickerProviderId == service.id {
                         activePathPickerProviderId = nil
                         validationResult = nil
@@ -337,6 +340,7 @@ struct SetupWizardView: View {
                 Spacer()
 
                 Button {
+                    pathValidator.cancel()
                     if isExpanded {
                         activePathPickerProviderId = nil
                         validationResult = nil
@@ -549,7 +553,7 @@ struct SetupWizardView: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 6) {
-                TextField(defaultHint, text: $customPathInput)
+                TextField(defaultHint, text: Binding(get: { customPathInput }, set: { pathValidator.cancel(); customPathInput = $0 }))
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
 
@@ -566,6 +570,7 @@ struct SetupWizardView: View {
 
                 if monitor.customProviderPaths[serviceId] != nil {
                     Button("リセット") {
+                        pathValidator.cancel()
                         monitor.setCustomPath(for: serviceId, path: "")
                         customPathInput = ""
                         validationResult = nil
@@ -575,6 +580,13 @@ struct SetupWizardView: View {
                 }
             }
 
+            if pathValidator.isRunning {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("ログを検証中…")
+                    Button("中止") { pathValidator.cancel() }
+                }
+            }
             if let result = validationResult {
                 HStack(spacing: 5) {
                     Image(systemName: result.isValid ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
@@ -708,6 +720,7 @@ struct SetupWizardView: View {
     }
 
     private func validateAndApply(for serviceId: String, path: String) {
+        pathValidator.cancel()
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             validationResult = LocalUsageCollector.ProviderPathScanResult(
@@ -716,26 +729,28 @@ struct SetupWizardView: View {
             return
         }
 
-        let res = LocalUsageCollector.validateAndScan(providerId: serviceId, path: trimmed)
-        validationResult = res
-        if res.isValid {
-            monitor.setCustomPath(for: serviceId, path: trimmed)
-            // Ensure service is enabled
-            if serviceId == "openai" {
-                monitor.showOpenAISection = true
-            } else if serviceId == "gemini" {
-                monitor.showGeminiSection = true
-            } else {
-                if let idx = monitor.customSubscriptions.firstIndex(where: { $0.id == serviceId }) {
-                    monitor.customSubscriptions[idx].isEnabled = true
-                } else if let preset = CustomSubscriptionConfig.preset(forId: serviceId) {
-                    var s = preset
-                    s.isEnabled = true
-                    monitor.addSubscription(s)
+        validationResult = nil
+        pathValidator.start(provider: serviceId, path: trimmed) { res in
+            validationResult = res
+            if res.isValid {
+                monitor.setCustomPath(for: serviceId, path: trimmed)
+                // Ensure service is enabled
+                if serviceId == "openai" {
+                    monitor.showOpenAISection = true
+                } else if serviceId == "gemini" {
+                    monitor.showGeminiSection = true
+                } else {
+                    if let idx = monitor.customSubscriptions.firstIndex(where: { $0.id == serviceId }) {
+                        monitor.customSubscriptions[idx].isEnabled = true
+                    } else if let preset = CustomSubscriptionConfig.preset(forId: serviceId) {
+                        var s = preset
+                        s.isEnabled = true
+                        monitor.addSubscription(s)
+                    }
                 }
-            }
-            Task {
-                await monitor.refresh()
+                Task {
+                    await monitor.refresh()
+                }
             }
         }
     }

@@ -103,35 +103,34 @@ public struct PeriodUsageMetric: Equatable, Identifiable {
         self.resetTimestamp = resetTimestamp
     }
 
-    public var effectiveLimitTokens: Int {
-        if let pct = serverUsedPercent, pct > 0.5, usedTokens > 0 {
-            return max(usedTokens, Int((Double(usedTokens) / (pct / 100.0)).rounded()))
-        }
-        return limitTokens
-    }
-
-    public var remainingTokens: Int {
-        if let pct = serverUsedPercent {
-            let ratio = min(1.0, max(0.0, (100.0 - pct) / 100.0))
-            if usedTokens > 0, pct > 0.5 {
-                return max(0, effectiveLimitTokens - usedTokens)
+    private var validatedValues: (limit: Int, remaining: Int, ratio: Double)? {
+        do {
+            _ = try UsageNumber.checked(usedTokens)
+            _ = try UsageNumber.checked(limitTokens)
+            var limit = limitTokens
+            if let pct = serverUsedPercent {
+                _ = try UsageNumber.finite(pct)
+                if pct > 0.5, usedTokens > 0 {
+                    limit = max(usedTokens, try UsageNumber.roundedCount(Double(usedTokens) / (pct / 100)))
+                }
+                let ratio = min(1, max(0, (100 - pct) / 100))
+                let remaining = usedTokens > 0 && pct > 0.5
+                    ? try UsageNumber.difference(limit, usedTokens)
+                    : try UsageNumber.roundedCount(Double(limitTokens) * ratio)
+                return (limit, remaining, ratio)
             }
-            return max(0, Int((Double(limitTokens) * ratio).rounded()))
-        }
-        return max(0, effectiveLimitTokens - usedTokens)
+            let remaining = try UsageNumber.difference(limit, usedTokens)
+            return (limit, remaining, limit > 0 ? min(1, Double(remaining) / Double(limit)) : 0)
+        } catch { return nil }
     }
 
-    public var remainingRatio: Double {
-        if let pct = serverUsedPercent {
-            return min(1.0, max(0.0, (100.0 - pct) / 100.0))
-        }
-        guard effectiveLimitTokens > 0 else { return 0 }
-        return min(1.0, max(0.0, Double(remainingTokens) / Double(effectiveLimitTokens)))
-    }
+    /// Computed on every access because this public model can be mutated after initialization.
+    public var isValid: Bool { validatedValues != nil }
+    public var effectiveLimitTokens: Int { validatedValues?.limit ?? 0 }
+    public var remainingTokens: Int { validatedValues?.remaining ?? 0 }
+    public var remainingRatio: Double { validatedValues?.ratio ?? 0 }
+    public var remainingPercent: Int { Int((remainingRatio * 100).rounded()) }
 
-    public var remainingPercent: Int {
-        Int((remainingRatio * 100).rounded())
-    }
 }
 
 // MARK: - Custom Subscription / Provider Configuration
@@ -693,5 +692,39 @@ public struct LocalUsageData: Codable, Equatable {
         self.detectedProviders = detectedProviders
         self.source = source
         self.updatedAt = updatedAt
+    }
+}
+
+// Validate persisted snapshots too; they do not necessarily originate in our collector.
+extension LocalUsageData {
+    public func validateNumbers() throws {
+        for value in [openaiUsedTokens, geminiUsedTokens].compactMap({ $0 }) { _ = try UsageNumber.checked(value) }
+        for value in [openaiCostUSD, geminiCostUSD, openaiCreditBalance].compactMap({ $0 }) { _ = try UsageNumber.finite(value) }
+        try openaiUsedByPeriod?.validateNumbers()
+        try geminiUsedByPeriod?.validateNumbers()
+        try openaiResetAtByPeriod?.validateNumbers()
+        try openaiServerUsedPercentByPeriod?.validateNumbers()
+        for provider in (providers ?? [:]).values {
+            try provider.usedByPeriod?.validateNumbers()
+            try provider.resetAtByPeriod?.validateNumbers()
+            try provider.serverUsedPercentByPeriod?.validateNumbers()
+            if let cost = provider.costUSD { _ = try UsageNumber.finite(cost) }
+        }
+    }
+}
+
+extension ProviderPeriodUsageJSON {
+    func validateNumbers() throws {
+        for value in [twoHours, fiveHours, daily, weekly, monthly].compactMap({ $0 }) {
+            _ = try UsageNumber.checked(value)
+        }
+    }
+}
+
+extension ProviderPeriodPercentJSON {
+    func validateNumbers() throws {
+        for value in [twoHours, fiveHours, daily, weekly, monthly].compactMap({ $0 }) {
+            _ = try UsageNumber.finite(value)
+        }
     }
 }

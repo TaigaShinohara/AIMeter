@@ -242,7 +242,7 @@ final class AIMeterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let targetFile = tempDir.appendingPathComponent("test_usage.json")
-        let collected = await LocalUsageCollector.collectAndSave(targetFileURL: targetFile)
+        let collected = try await LocalUsageCollector.collectAndSave(targetFileURL: targetFile, home: tempDir)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: targetFile.path))
         XCTAssertEqual(collected.source, "local_logs_native")
@@ -431,7 +431,7 @@ final class AIMeterTests: XCTestCase {
             try? encoded.write(to: tempFile)
         }
 
-        let snapshot = SharedStore.createCurrentSnapshot(customURL: tempFile)
+        let snapshot = SharedStore.createCurrentSnapshot(customURL: tempFile, subscriptions: [], openaiLimit5h: 40_000_000)
         XCTAssertTrue(snapshot.hasData)
         XCTAssertGreaterThan(snapshot.allServices.count, 0)
         XCTAssertNotNil(snapshot.mostCriticalService)

@@ -8,6 +8,10 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
+import time
+import math
+from contextlib import closing
 import tempfile
 from typing import Any, Dict, Optional, Tuple
 
@@ -509,52 +513,131 @@ def collect_copilot_usage(now: datetime.datetime, cutoffs: Dict[str, datetime.da
     }
 
 
-def collect_windsurf_usage(now: datetime.datetime) -> Optional[Dict[str, Any]]:
-    db_path = (
-        Path.home()
-        / "Library"
-        / "Application Support"
-        / "Windsurf"
-        / "User"
-        / "globalStorage"
-        / "state.vscdb"
-    )
+def checked_count(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("Invalid usage number")
+    number = float(value)
+    if not math.isfinite(number) or not 0 <= number <= 9007199254740991:
+        raise ValueError("Invalid usage number")
+    return int(number)
+
+
+def read_windsurf_plan(db_path: Path, *, seconds: float = 2.0,
+                       steps: int = 1_000_000, max_bytes: int = 8 * 1024 * 1024,
+                       snapshot_ready=None) -> Optional[Dict[str, Any]]:
+    deadline = time.monotonic() + seconds
+    remaining_bytes = 256 * 1024 * 1024
+
+    def copy_regular(source: Path, target: Path) -> None:
+        nonlocal remaining_bytes
+        descriptor = os.open(source, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as incoming:
+            info = os.fstat(incoming.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > remaining_bytes:
+                raise ValueError("Invalid or oversized Windsurf database")
+            with target.open("xb") as outgoing:
+                os.fchmod(outgoing.fileno(), 0o600)
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise ValueError("Windsurf database time budget exceeded")
+                    chunk = incoming.read(32768)
+                    if not chunk:
+                        break
+                    remaining_bytes -= len(chunk)
+                    if remaining_bytes < 0:
+                        raise ValueError("Windsurf database byte budget exceeded")
+                    outgoing.write(chunk)
+
+    # SQLite must not reopen an attacker-replaceable source path. Retain the
+    # committed WAL alongside the private copy; corrupt/racing snapshots fail.
+    with tempfile.TemporaryDirectory(prefix="aimeter-db-") as directory:
+        snapshot = Path(directory) / "state.vscdb"
+        copy_regular(db_path, snapshot)
+        wal = Path(str(db_path) + "-wal")
+        if wal.exists():
+            copy_regular(wal, Path(str(snapshot) + "-wal"))
+        if snapshot_ready is not None:
+            snapshot_ready()
+        if time.monotonic() >= deadline:
+            raise ValueError("Windsurf database time budget exceeded")
+        remaining = steps
+
+        def progress() -> int:
+            nonlocal remaining
+            remaining -= 100
+            return int(remaining <= 0 or time.monotonic() >= deadline)
+
+        with closing(sqlite3.connect(snapshot.as_uri() + "?mode=ro", uri=True, timeout=0.1)) as conn:
+            conn.set_progress_handler(progress, 100)
+            # Python 3.9 (macOS system Python) lacks setlimit. The private DB is
+            # still byte-bounded, and the SELECT bounds its BLOB result below.
+            if hasattr(conn, "setlimit"):
+                conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, max_bytes)
+                conn.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, 65536)
+                conn.setlimit(sqlite3.SQLITE_LIMIT_COLUMN, 128)
+                conn.setlimit(sqlite3.SQLITE_LIMIT_EXPR_DEPTH, 32)
+                conn.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
+            conn.execute("PRAGMA trusted_schema=OFF")
+            conn.execute("PRAGMA query_only=ON")
+            tables = conn.execute("PRAGMA main.table_list('ItemTable')").fetchall()
+            if len(tables) != 1 or tables[0][2] != "table":
+                raise ValueError("ItemTable must be an ordinary table")
+            columns = conn.execute("PRAGMA main.table_xinfo('ItemTable')").fetchall()
+            if any(column[6] != 0 for column in columns) or not {"key", "value"} <= {column[1].lower() for column in columns}:
+                raise ValueError("Unsupported ItemTable columns")
+
+            def authorize(action, first, second, database, trigger):
+                if action == sqlite3.SQLITE_SELECT:
+                    return sqlite3.SQLITE_OK
+                if action == sqlite3.SQLITE_READ and first.lower() == "itemtable" and second.lower() in {"key", "value"}:
+                    return sqlite3.SQLITE_OK
+                if action == sqlite3.SQLITE_FUNCTION and second.lower() == "substr":
+                    return sqlite3.SQLITE_OK
+                return sqlite3.SQLITE_DENY
+
+            conn.set_authorizer(authorize)
+            row = conn.execute(
+                "SELECT substr(CAST(value AS BLOB),1,?) FROM main.ItemTable WHERE key='windsurf.settings.cachedPlanInfo' LIMIT 1",
+                (max_bytes + 1,),
+            ).fetchone()
+            if time.monotonic() >= deadline:
+                raise ValueError("Windsurf database time budget exceeded")
+            if not row:
+                return None
+            if not isinstance(row[0], bytes) or len(row[0]) > max_bytes:
+                raise ValueError("Invalid Windsurf plan value")
+            result = json.loads(row[0])
+            if not isinstance(result, dict):
+                raise ValueError("Invalid Windsurf plan")
+            return result
+
+
+def collect_windsurf_usage(now: datetime.datetime, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    db_path = db_path or Path.home() / "Library/Application Support/Windsurf/User/globalStorage/state.vscdb"
     if not db_path.exists():
         return None
-
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        cur = conn.cursor()
-        cur.execute(
-            'SELECT value FROM ItemTable WHERE key="windsurf.settings.cachedPlanInfo"'
-        )
-        row = cur.fetchone()
-        conn.close()
-        if not row or not row[0]:
-            return None
-
-        info = json.loads(row[0])
-        plan_name = info.get("planName") or "Pro"
-        usage = info.get("usage") or {}
-        used_msgs = int(usage.get("usedMessages") or 0)
-        total_msgs = int(usage.get("messages") or 50000)
-
-        used_by_period = empty_period_dict()
-        used_by_period["30d"] = used_msgs
-        used_by_period["7d"] = min(used_msgs, int(used_msgs * 0.35))
-        used_by_period["1d"] = min(used_msgs, int(used_msgs * 0.08))
-
-        pct_30d = round((used_msgs / total_msgs) * 100.0, 2) if total_msgs > 0 else 0.0
-        result: Dict[str, Any] = {
-            "usedByPeriod": used_by_period,
-            "costUSD": 20.0,
-            "status": f"Windsurf {plan_name}",
-        }
-        if pct_30d > 0:
-            result["serverUsedPercentByPeriod"] = {"30d": pct_30d}
-        return result
-    except Exception:
+    info = read_windsurf_plan(db_path)
+    if info is None:
         return None
+    plan_name = info.get("planName") or "Pro"
+    usage = info.get("usage") or {}
+    used_msgs = checked_count(usage.get("usedMessages", 0))
+    total_msgs = checked_count(usage.get("messages", 50000))
+
+    used_by_period = empty_period_dict()
+    used_by_period["30d"] = used_msgs
+    used_by_period["7d"] = min(used_msgs, int(used_msgs * 0.35))
+    used_by_period["1d"] = min(used_msgs, int(used_msgs * 0.08))
+
+    pct_30d = round((used_msgs / total_msgs) * 100.0, 2) if total_msgs > 0 else 0.0
+    result: Dict[str, Any] = {
+        "usedByPeriod": used_by_period,
+        "costUSD": 20.0,
+        "status": f"Windsurf {plan_name}",
+    }
+    if pct_30d > 0:
+        result["serverUsedPercentByPeriod"] = {"30d": pct_30d}
+    return result
 
 
 def collect_cursor_usage(now: datetime.datetime, cutoffs: Dict[str, datetime.datetime]) -> Optional[Dict[str, Any]]:

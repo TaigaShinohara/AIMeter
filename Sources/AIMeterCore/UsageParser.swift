@@ -49,17 +49,17 @@ public enum UsageParser {
         var records: [BucketTokenRecord] = []
         if let buckets = json["data"] as? [[String: Any]] {
             for bucket in buckets {
-                let bStart = parseIntValue(bucket["start_time"])
-                let bEnd = parseIntValue(bucket["end_time"])
+                let bStart = try parseIntValue(bucket["start_time"])
+                let bEnd = try parseIntValue(bucket["end_time"])
                 var bucketTokens = 0
                 if let results = bucket["results"] as? [[String: Any]] {
                     for res in results {
-                        let input = parseIntValue(res["input_tokens"])
-                        let output = parseIntValue(res["output_tokens"])
-                        bucketTokens += (input + output)
+                        let input = try parseIntValue(res["input_tokens"])
+                        let output = try parseIntValue(res["output_tokens"])
+                        bucketTokens = try UsageNumber.sum([bucketTokens, input, output])
                     }
                 }
-                totalTokens += bucketTokens
+                totalTokens = try UsageNumber.add(totalTokens, bucketTokens)
                 records.append(BucketTokenRecord(startTime: bStart, endTime: bEnd, tokens: bucketTokens))
             }
         }
@@ -83,7 +83,7 @@ public enum UsageParser {
                 if let results = bucket["results"] as? [[String: Any]] {
                     for res in results {
                         if let amountObj = res["amount"] as? [String: Any] {
-                            totalCost += parseDoubleValue(amountObj["value"])
+                            totalCost = try UsageNumber.add(totalCost, parseDoubleValue(amountObj["value"]))
                         }
                     }
                 }
@@ -106,7 +106,7 @@ public enum UsageParser {
             if let points = item["points"] as? [[String: Any]] {
                 for pt in points {
                     if let valObj = pt["value"] as? [String: Any] {
-                        total += parseIntValue(valObj["int64Value"] ?? valObj["doubleValue"])
+                        total = try UsageNumber.add(total, parseIntValue(valObj["int64Value"] ?? valObj["doubleValue"]))
                     }
                 }
             }
@@ -114,29 +114,19 @@ public enum UsageParser {
         return total
     }
 
-    public static func parseIntValue(_ anyVal: Any?) -> Int {
-        if let intVal = anyVal as? Int {
-            return intVal
-        } else if let numVal = anyVal as? NSNumber {
-            return numVal.intValue
-        } else if let strVal = anyVal as? String, let parsed = Int(strVal) {
-            return parsed
-        } else if let strVal = anyVal as? String, let parsedDouble = Double(strVal) {
-            return Int(parsedDouble.rounded())
-        }
-        return 0
+    public static func parseIntValue(_ anyVal: Any?) throws -> Int {
+        try UsageNumber.count(anyVal)
     }
 
-    public static func parseDoubleValue(_ anyVal: Any?) -> Double {
-        if let dblVal = anyVal as? Double {
-            return dblVal
-        } else if let intVal = anyVal as? Int {
-            return Double(intVal)
-        } else if let numVal = anyVal as? NSNumber {
-            return numVal.doubleValue
-        } else if let strVal = anyVal as? String, let parsed = Double(strVal) {
-            return parsed
+    public static func parseDoubleValue(_ anyVal: Any?) throws -> Double {
+        try UsageNumber.nonnegative(anyVal)
+    }
+
+    /// Also used after pagination: individually valid pages can exceed the total budget.
+    public static func totalTokens(in buckets: [BucketTokenRecord], since start: Int = 0) throws -> Int {
+        try buckets.reduce(0) { total, bucket in
+            _ = try UsageNumber.checked(bucket.tokens)
+            return bucket.startTime >= start ? try UsageNumber.add(total, bucket.tokens) : total
         }
-        return 0.0
     }
 }
