@@ -69,7 +69,11 @@ enum LocalUsageCollector {
                let provs = existingRoot["providers"] as? [String: Any] {
                 let decoder = JSONDecoder()
                 for (k, v) in provs {
-                    if let d = try? JSONSerialization.data(withJSONObject: v),
+                    // Foundation raises an Objective-C exception for scalars;
+                    // Swift's try? cannot catch it. Preserve valid providers
+                    // independently when another saved provider is malformed.
+                    if let object = v as? [String: Any],
+                       let d = try? JSONSerialization.data(withJSONObject: object),
                        let parsed = try? decoder.decode(CustomProviderUsageJSON.self, from: d) {
                         existingProviders[k] = parsed
                     }

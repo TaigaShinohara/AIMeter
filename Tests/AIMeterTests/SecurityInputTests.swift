@@ -339,6 +339,23 @@ final class SecurityInputTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: snapshot), before)
     }
 
+    func testMalformedSavedProvidersDoNotCrashOrDiscardValidProviders() async throws {
+        for invalid in ["7", "\"text\"", "null", "true", "false", "[]",
+                        "{\"usedByPeriod\":7}", "{\"costUSD\":\"invalid\"}"] {
+            let snapshot = try write("usage.json", """
+            {"providers":{"broken":\(invalid),
+              "custom":{"usedByPeriod":{"30d":12},"costUSD":1.5,"status":"Synthetic"}}}
+            """)
+            let result = try await LocalUsageCollector.collectAndSave(targetFileURL: snapshot, home: root)
+            XCTAssertNil(result.providers?["broken"], invalid)
+            XCTAssertEqual(result.providers?["custom"]?.usedByPeriod?.monthly, 12)
+            XCTAssertEqual(result.providers?["custom"]?.costUSD, 1.5)
+            XCTAssertEqual(result.providers?["custom"]?.status, "Synthetic")
+            let saved = try JSONDecoder().decode(LocalUsageData.self, from: Data(contentsOf: snapshot))
+            XCTAssertEqual(saved, result)
+        }
+    }
+
     @MainActor
     func testCancelledOrReplacedValidationCannotApplyStalePath() async {
         let validator = PathValidation()
