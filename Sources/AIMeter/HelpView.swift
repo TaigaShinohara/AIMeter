@@ -2,6 +2,7 @@ import SwiftUI
 
 // MARK: - Help & QA View
 struct HelpView: View {
+    var isMenuBar: Bool = false
     var onBack: () -> Void
 
     @State private var expandedQAIds: Set<String> = ["qa-1", "qa-2"]
@@ -80,6 +81,12 @@ struct HelpView: View {
         VStack(alignment: .leading, spacing: 12) {
             // Top Bar
             HStack(spacing: 8) {
+                if !isMenuBar {
+                    Color.clear
+                        .frame(width: 52, height: 16)
+                        .accessibilityHidden(true)
+                }
+
                 Button {
                     onBack()
                 } label: {
@@ -90,13 +97,9 @@ struct HelpView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.primary.opacity(0.08))
-                    )
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GlassCapsuleButtonStyle())
 
                 Text("ヘルプ & よくある質問")
                     .font(.system(size: 14, weight: .bold))

@@ -1144,8 +1144,7 @@ struct ProviderUsageSection: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.primary.opacity(0.04))
+                FrostedGlassCardBackground(cornerRadius: 9)
             )
         }
     }
@@ -1155,6 +1154,7 @@ struct ProviderUsageSection: View {
 struct SettingsPopoverView: View {
     @ObservedObject var monitor: UsageMonitor
     @ObservedObject private var launchAtLogin = LaunchAtLoginManager.shared
+    var isMenuBar: Bool = false
     var onOpenHelp: (() -> Void)? = nil
     var onClose: (() -> Void)? = nil
 
@@ -1193,9 +1193,9 @@ struct SettingsPopoverView: View {
             expandedServiceIds.remove(id)
         } else {
             expandedServiceIds.insert(id)
-            if pathInputs[id] == nil {
-                pathInputs[id] = monitor.customProviderPaths[id] ?? ""
-            }
+        }
+        if pathInputs[id] == nil {
+            pathInputs[id] = monitor.customProviderPaths[id] ?? ""
         }
     }
 
@@ -1207,6 +1207,12 @@ struct SettingsPopoverView: View {
         VStack(alignment: .leading, spacing: 10) {
             // Top Bar
             HStack(spacing: 8) {
+                if !isMenuBar {
+                    Color.clear
+                        .frame(width: 52, height: 16)
+                        .accessibilityHidden(true)
+                }
+
                 if let onClose {
                     Button {
                         onClose()
@@ -1218,13 +1224,9 @@ struct SettingsPopoverView: View {
                         .font(.system(size: 12.5, weight: .medium))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(Color.primary.opacity(0.08))
-                        )
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GlassCapsuleButtonStyle())
                 }
 
                 Text("設定")
@@ -1900,54 +1902,6 @@ func openOrRestoreDesktopWidgetWindow(monitor: UsageMonitor? = nil, openWindow: 
     }
 }
 
-// MARK: - Mac-style Traffic Light Buttons for Widget
-struct MacWindowTrafficLights: View {
-    let onClose: () -> Void
-    let onMiniaturize: () -> Void
-    @State private var isHovering: Bool = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            // 赤ボタン: 閉じる
-            Button(action: onClose) {
-                ZStack {
-                    Circle()
-                        .fill(Color(red: 1.0, green: 0.36, blue: 0.33))
-                        .overlay(Circle().strokeBorder(Color(red: 0.86, green: 0.18, blue: 0.18), lineWidth: 0.5))
-                    Image(systemName: "xmark")
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(Color.black.opacity(isHovering ? 0.75 : 0.35))
-                }
-                .frame(width: 12, height: 12)
-                .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .help("閉じる (⌘W)")
-            .accessibilityLabel("閉じる")
-
-            // 黄ボタン: 最小化
-            Button(action: onMiniaturize) {
-                ZStack {
-                    Circle()
-                        .fill(Color(red: 1.0, green: 0.74, blue: 0.18))
-                        .overlay(Circle().strokeBorder(Color(red: 0.86, green: 0.60, blue: 0.10), lineWidth: 0.5))
-                    Image(systemName: "minus")
-                        .font(.system(size: 7, weight: .heavy))
-                        .foregroundStyle(Color.black.opacity(isHovering ? 0.75 : 0.35))
-                }
-                .frame(width: 12, height: 12)
-                .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .help("最小化 (⌘M)")
-            .accessibilityLabel("最小化")
-        }
-        .onHover { hovering in
-            isHovering = hovering
-        }
-    }
-}
-
 struct DesktopWidgetWindowAccessor: NSViewRepresentable {
     var allowBackgroundDrag: Bool = true
     var isPinned: Bool = true
@@ -1974,7 +1928,8 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
     }
 
     static func configure(window: NSWindow, allowBackgroundDrag: Bool, isPinned: Bool) {
-        window.styleMask.insert([.titled, .closable, .miniaturizable])
+        window.styleMask.insert([.titled, .fullSizeContentView, .closable, .miniaturizable])
+        window.styleMask.remove([.resizable])
         window.level = isPinned ? .floating : .normal
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isMovableByWindowBackground = allowBackgroundDrag
@@ -1983,9 +1938,21 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
         window.hasShadow = true
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.standardWindowButton(.closeButton)?.isHidden = true
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.standardWindowButton(.zoomButton)?.isHidden = true
+        window.titlebarSeparatorStyle = .none
+
+        // ネイティブ macOS トラフィックライト（標準の閉じる・最小化ボタン）を表示
+        if let closeBtn = window.standardWindowButton(.closeButton) {
+            closeBtn.isHidden = false
+            closeBtn.isEnabled = true
+        }
+        if let miniBtn = window.standardWindowButton(.miniaturizeButton) {
+            miniBtn.isHidden = false
+            miniBtn.isEnabled = true
+        }
+        if let zoomBtn = window.standardWindowButton(.zoomButton) {
+            zoomBtn.isHidden = true
+        }
+
         window.setFrameAutosaveName("AIMeterDesktopWidgetFrame")
         if !allowBackgroundDrag {
             NSApplication.shared.activate(ignoringOtherApps: true)
@@ -2023,7 +1990,7 @@ struct AIMeterCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if showHelp {
-                HelpView {
+                HelpView(isMenuBar: isMenuBar) {
                     withAnimation(.easeInOut(duration: 0.15)) {
                         showHelp = false
                     }
@@ -2031,6 +1998,7 @@ struct AIMeterCardView: View {
             } else if showSettings {
                 SettingsPopoverView(
                     monitor: monitor,
+                    isMenuBar: isMenuBar,
                     onOpenHelp: {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             showSettings = false
@@ -2047,15 +2015,10 @@ struct AIMeterCardView: View {
                 // Header
                 HStack(spacing: 6) {
                     if !isMenuBar {
-                        MacWindowTrafficLights(
-                            onClose: {
-                                closeDesktopWidgetWindow(monitor: monitor)
-                            },
-                            onMiniaturize: {
-                                miniaturizeDesktopWidgetWindow(monitor: monitor)
-                            }
-                        )
-                        .padding(.trailing, 2)
+                        // ネイティブ macOS トラフィックライト（閉じる・最小化）用のスペース
+                        Color.clear
+                            .frame(width: 52, height: 16)
+                            .accessibilityHidden(true)
                     }
 
                     Text("AIMeter")
@@ -2078,13 +2041,9 @@ struct AIMeterCardView: View {
                         .foregroundStyle(monitor.isDetailedView ? Color.accentColor : Color.secondary)
                         .padding(.horizontal, 7)
                         .frame(height: 22)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(monitor.isDetailedView ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.06))
-                        )
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GlassCapsuleButtonStyle(isSelected: monitor.isDetailedView))
                     .help(monitor.isDetailedView ? "全枠表示中（クリックで最逼迫＋月次の要点表示に短縮）" : "要点表示中（クリックで設定した全枠を表示）")
 
                     // 更新ボタン (更新中はスピナー表示)
@@ -2104,13 +2063,9 @@ struct AIMeterCardView: View {
                             }
                         }
                         .frame(width: 24, height: 22)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(Color.primary.opacity(0.06))
-                        )
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GlassCapsuleButtonStyle())
                     .disabled(monitor.isRefreshing)
                     .help("今すぐ更新")
                     .accessibilityLabel("今すぐ更新")
@@ -2126,13 +2081,9 @@ struct AIMeterCardView: View {
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(monitor.isWidgetPinned ? Color.accentColor : Color.secondary)
                                 .frame(width: 24, height: 22)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .fill(monitor.isWidgetPinned ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.06))
-                                )
                                 .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GlassCapsuleButtonStyle(isSelected: monitor.isWidgetPinned))
                         .help(monitor.isWidgetPinned ? "最前面固定中 (クリックで解除)" : "通常ウィンドウ (クリックで最前面固定)")
                     }
 
@@ -2150,13 +2101,9 @@ struct AIMeterCardView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 7)
                         .frame(height: 22)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(Color.primary.opacity(0.06))
-                        )
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GlassCapsuleButtonStyle())
                     .help("サービス・パス・上限の設定")
                     .accessibilityLabel("設定を開く")
                 }
@@ -2240,15 +2187,10 @@ struct AIMeterCardView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(14)
         .frame(width: (showSettings || showHelp) ? 380 : 320)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
-                )
+            LiquidGlassBackground(cornerRadius: 16)
         )
         .background(
             Group {
