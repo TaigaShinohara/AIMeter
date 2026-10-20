@@ -1,0 +1,49 @@
+# AIMeter
+
+macOSのメニューバーとウィジェットに、AIツールの利用量を表示するSwiftUIアプリです。
+Codex、Gemini / Antigravity、Claude Code、Grok Bot、GitHub Copilot、Windsurf、Cursorのローカルデータを集計します。
+表示値にはログからの推定や設定した上限が含まれ、サービスの公式請求額・残量と一致するとは限りません。
+
+## 動作・ビルド環境
+
+- 実行対象：macOS 14以降
+- ビルド：macOS 26 SDKを含むXcode（macOS 26のUI APIを使用）
+- Swift Package Manager。外部Swiftパッケージへの依存なし
+- 通常のアプリ動作にPythonは不要。旧収集スクリプトのテストにはPython 3.9以降を使用
+
+Apple Silicon環境でビルドと合成データによるテストを確認しています。
+このリポジトリはソースコードの公開です。署名・公証済みの配布バイナリや、Universal Binaryの検証を提供するものではありません。
+
+## ビルドとテスト
+
+```sh
+git clone https://github.com/TaigaShinohara/AIMeter.git
+cd AIMeter
+swift build -c release
+swift test
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Tests -p 'test_*.py' -v
+```
+
+テストは一時ディレクトリの合成データを使い、個人の利用ログやAPI資格情報を必要としません。
+
+アプリバンドルを作成する場合は `./scripts/build_app.sh` を使用します。
+このスクリプトはローカルの署名ID（なければad-hoc署名）を使い、
+`/Applications` が書込み可能な場合は既存の `AIMeter.app` を更新してWidgetを登録します。
+`./run.sh`、`make run`、`Launch AIMeter.command` も必要に応じてこのビルド処理を実行し、アプリを起動します。
+手順と機能は [配布・導入ガイド](DISTRIBUTION_GUIDE.md) を参照してください。
+
+## データと通信
+
+- ローカル収集は各ツールの既定パス、または設定画面で指定したパスを読み取ります。アプリ本体はApp Sandboxによるホーム配下への制限を持ちません。
+- 集計結果は `~/.ai_meter_usage.json` に保存し、所有者だけが読み書きできる権限（0600）を設定します。ログ本文をこの集計ファイルへ保存する設計ではありません。
+- 任意のOpenAI連携を設定すると、OpenAIの組織利用量・費用APIへ認証付きで通信します。Admin KeyはmacOS Keychainに保存します。
+- 任意のGCP連携では、ローカルの `gcloud` が発行するトークンでGoogle Cloud Monitoringへ通信します。GCP Project IDはアプリ設定に保存します。
+- 上記APIへの送信にローカルのプロンプト本文は使用しません。
+- 大きすぎるファイル・行、過剰な探索件数、不正な数値は拒否します。入力制限に達した収集では以前の集計ファイルを保持します。時間制限は協調的な検査であり、OSのI/Oタイムアウトではありません。
+
+個人ログ、集計ファイル、APIキーをIssueやPull Requestに添付しないでください。
+セキュリティ上の問題は [SECURITY.md](SECURITY.md) の手順で報告してください。
+
+## ライセンス
+
+[MIT License](LICENSE)
