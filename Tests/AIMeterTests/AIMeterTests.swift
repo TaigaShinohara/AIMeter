@@ -1,5 +1,6 @@
 import XCTest
 @testable import AIMeter
+import AIMeterCore
 
 final class AIMeterTests: XCTestCase {
     func testFormatTokenCount() {
@@ -298,14 +299,18 @@ final class AIMeterTests: XCTestCase {
     func testProviderUnitAndCompactUsageFormatting() {
         XCTAssertEqual(providerUnit(for: "cursor"), "req")
         XCTAssertEqual(providerUnit(for: "copilot"), "req")
-        XCTAssertEqual(providerUnit(for: "windsurf"), "req")
-        XCTAssertEqual(providerUnit(for: "poe"), "req")
-        XCTAssertEqual(providerUnit(for: "devin"), "req")
+        XCTAssertEqual(providerUnit(for: "perplexity"), "req")
+        XCTAssertEqual(providerUnit(for: "trae"), "req")
+
+        XCTAssertEqual(providerUnit(for: "windsurf"), "msgs")
+        XCTAssertEqual(providerUnit(for: "poe"), "pts")
+        XCTAssertEqual(providerUnit(for: "devin"), "ACU")
 
         XCTAssertEqual(providerUnit(for: "openai"), "tokens")
         XCTAssertEqual(providerUnit(for: "gemini"), "tokens")
         XCTAssertEqual(providerUnit(for: "claude"), "tokens")
         XCTAssertEqual(providerUnit(for: "grokbot"), "tokens")
+        XCTAssertEqual(providerUnit(for: "deepseek"), "tokens")
 
         // Token formatting
         XCTAssertEqual(formatCompactUsage(140_000_000, unit: "tokens"), "140M")
@@ -313,10 +318,10 @@ final class AIMeterTests: XCTestCase {
         XCTAssertEqual(formatCompactUsage(45_000, unit: "tokens"), "45K")
         XCTAssertEqual(formatCompactUsage(500, unit: "tokens"), "500")
 
-        // Request formatting
+        // Request / msgs / pts / ACU formatting
         XCTAssertEqual(formatCompactUsage(23, unit: "req"), "23")
         XCTAssertEqual(formatCompactUsage(1_500, unit: "req"), "1.5K")
-        XCTAssertEqual(formatCompactUsage(25_000, unit: "req"), "25K")
+        XCTAssertEqual(formatCompactUsage(25_000, unit: "msgs"), "25K")
     }
 
     func testProgressiveDisclosureSummaryFiltering() {
@@ -375,10 +380,66 @@ final class AIMeterTests: XCTestCase {
         XCTAssertEqual(singleRowSummary.displayedMetrics.first?.period, .monthly)
     }
 
-    func testMenuBarDisplayModeLabels() {
+    func testMenuBarDisplayModeLabelsAndHonestPresets() {
         XCTAssertEqual(MenuBarDisplayMode.smart.label, "最逼迫のみ (推奨)")
         XCTAssertEqual(MenuBarDisplayMode.compact.label, "コンパクト (2つ)")
         XCTAssertEqual(MenuBarDisplayMode.iconOnly.label, "数値のみ")
         XCTAssertEqual(MenuBarDisplayMode.all.label, "すべて表示")
+
+        // Presets should have 0.0 initial usedCostUSD (no fake hardcoded monthly charges)
+        let presetIds = ["grokbot", "claude", "cursor", "windsurf", "copilot", "devin", "perplexity", "deepseek", "poe", "trae"]
+        for id in presetIds {
+            let preset = CustomSubscriptionConfig.preset(forId: id)
+            XCTAssertNotNil(preset)
+            XCTAssertEqual(preset?.usedCostUSD, 0.0, "Preset \(id) should default to 0.0 usedCostUSD")
+        }
+
+        // Windsurf only has cumulative total count, so only 30d should be enabled by default
+        let windsurf = CustomSubscriptionConfig.windsurfPreset()
+        XCTAssertEqual(windsurf.enabledPeriodRawValues, ["30d"])
+    }
+
+    func testWidgetSnapshotGeneration() {
+        let sampleData = LocalUsageData(
+            openaiUsedTokens: 5_000_000,
+            openaiCostUSD: 2.50,
+            geminiUsedTokens: 100_000,
+            geminiCostUSD: 0.80,
+            openaiUsedByPeriod: ProviderPeriodUsageJSON(fiveHours: 20_000_000),
+            providers: [
+                "claude": CustomProviderUsageJSON(
+                    usedByPeriod: ProviderPeriodUsageJSON(fiveHours: 1_200_000),
+                    costUSD: 1.20,
+                    status: "Pro"
+                ),
+                "cursor": CustomProviderUsageJSON(
+                    usedByPeriod: ProviderPeriodUsageJSON(daily: 45),
+                    costUSD: 0.0,
+                    status: "Agent"
+                )
+            ],
+            source: "local_logs_test",
+            updatedAt: "2026-10-19T09:30:00Z"
+        )
+
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let tempFile = tempDir.appendingPathComponent("usage.json")
+        if let encoded = try? JSONEncoder().encode(sampleData) {
+            try? encoded.write(to: tempFile)
+        }
+
+        let snapshot = SharedStore.createCurrentSnapshot(customURL: tempFile)
+        XCTAssertTrue(snapshot.hasData)
+        XCTAssertGreaterThan(snapshot.allServices.count, 0)
+        XCTAssertNotNil(snapshot.mostCriticalService)
+
+        // The critical service should be the one with lowest remaining percentage
+        if let critical = snapshot.mostCriticalService {
+            XCTAssertLessThanOrEqual(critical.remainingPercent, 100)
+            XCTAssertFalse(critical.shortName.isEmpty)
+        }
     }
 }

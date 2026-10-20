@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import AIMeterCore
 
 // MARK: - Native Local Usage Collector
 /// Scans local AI tool sessions and storage directly on macOS with zero external Python dependency.
@@ -631,7 +632,7 @@ enum LocalUsageCollector {
             usedByPeriod: usedJSON,
             serverUsedPercentByPeriod: nil,
             resetAtByPeriod: nil,
-            costUSD: cost30d > 0 ? round(cost30d * 100) / 100.0 : 20.0,
+            costUSD: cost30d > 0 ? round(cost30d * 100) / 100.0 : 0.0,
             status: statusLabel
         )
     }
@@ -736,7 +737,7 @@ enum LocalUsageCollector {
             usedByPeriod: usedJSON,
             serverUsedPercentByPeriod: serverPctJSON,
             resetAtByPeriod: resetAtJSON,
-            costUSD: costUSD > 0 ? costUSD : 30.0,
+            costUSD: costUSD,
             status: planLabel
         )
     }
@@ -788,19 +789,14 @@ enum LocalUsageCollector {
         let usedMsgs = (usage["usedMessages"] as? NSNumber)?.intValue ?? 0
         let totalMsgs = (usage["messages"] as? NSNumber)?.intValue ?? 50000
 
-        var usedCounts = ["2h": 0, "5h": 0, "1d": 0, "7d": 0, "30d": 0]
-        usedCounts["30d"] = usedMsgs
-        usedCounts["7d"] = min(usedMsgs, Int(Double(usedMsgs) * 0.35))
-        usedCounts["1d"] = min(usedMsgs, Int(Double(usedMsgs) * 0.08))
-
         let pct30d = totalMsgs > 0 ? round((Double(usedMsgs) / Double(totalMsgs)) * 10000.0) / 100.0 : 0.0
 
         let usedJSON = ProviderPeriodUsageJSON(
-            twoHours: usedCounts["2h"],
-            fiveHours: usedCounts["5h"],
-            daily: usedCounts["1d"],
-            weekly: usedCounts["7d"],
-            monthly: usedCounts["30d"]
+            twoHours: 0,
+            fiveHours: 0,
+            daily: 0,
+            weekly: 0,
+            monthly: usedMsgs
         )
         let serverPctJSON = pct30d > 0 ? ProviderPeriodPercentJSON(
             twoHours: nil, fiveHours: nil, daily: nil, weekly: nil, monthly: pct30d
@@ -810,7 +806,7 @@ enum LocalUsageCollector {
             usedByPeriod: usedJSON,
             serverUsedPercentByPeriod: serverPctJSON,
             resetAtByPeriod: nil,
-            costUSD: 20.0,
+            costUSD: 0.0,
             status: "Windsurf \(planName)"
         )
     }
@@ -892,7 +888,7 @@ enum LocalUsageCollector {
             usedByPeriod: usedJSON,
             serverUsedPercentByPeriod: nil,
             resetAtByPeriod: nil,
-            costUSD: 10.0,
+            costUSD: 0.0,
             status: "Premium Reqs"
         )
     }
@@ -951,7 +947,7 @@ enum LocalUsageCollector {
             usedByPeriod: usedJSON,
             serverUsedPercentByPeriod: nil,
             resetAtByPeriod: nil,
-            costUSD: 20.0,
+            costUSD: 0.0,
             status: "Pro / Agent"
         )
     }

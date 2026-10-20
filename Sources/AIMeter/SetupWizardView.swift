@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AIMeterCore
 
 // MARK: - Setup Wizard View
 struct SetupWizardView: View {
@@ -387,11 +388,11 @@ struct SetupWizardView: View {
 
             // Preset Quick-add Buttons
             HStack(spacing: 6) {
-                Button("+ Devin") { monitor.addSubscription(.devinPreset()) }
-                Button("+ Perplexity") { monitor.addSubscription(.perplexityPreset()) }
-                Button("+ DeepSeek") { monitor.addSubscription(.deepseekPreset()) }
-                Button("+ Poe") { monitor.addSubscription(.poePreset()) }
-                Button("+ Trae") { monitor.addSubscription(.traePreset()) }
+                Button("+ Devin") { addOrEnablePreset(.devinPreset()) }
+                Button("+ Perplexity") { addOrEnablePreset(.perplexityPreset()) }
+                Button("+ DeepSeek") { addOrEnablePreset(.deepseekPreset()) }
+                Button("+ Poe") { addOrEnablePreset(.poePreset()) }
+                Button("+ Trae") { addOrEnablePreset(.traePreset()) }
             }
             .controlSize(.small)
             .font(.system(size: 12))
@@ -626,6 +627,14 @@ struct SetupWizardView: View {
                     monitor.addSubscription(newSub)
                 }
             }
+        }
+    }
+
+    private func addOrEnablePreset(_ preset: CustomSubscriptionConfig) {
+        if let idx = monitor.customSubscriptions.firstIndex(where: { $0.id == preset.id }) {
+            monitor.customSubscriptions[idx].isEnabled = true
+        } else {
+            monitor.addSubscription(preset)
         }
     }
 

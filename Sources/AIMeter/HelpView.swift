@@ -31,7 +31,7 @@ struct HelpView: View {
             id: "qa-3",
             category: "トラブルシューティング",
             question: "使っているツールが「未検出」と表示される場合は？",
-            answer: "ポータブル版エディタや非標準のディレクトリにインストールしている場合、設定画面または初期セットアップ画面の「パス指定」ボタンから、ログファイル（.jsonl や state.vscdb）または保存先フォルダを直接指定できます。「検証 & 適用」を押して検証に成功すると即座に読み込まれます。"
+            answer: "ポータブル版エディタや非標準のディレクトリにインストールしている場合、設定画面の「ログパス」ボタンから、ログファイル（.jsonl や state.vscdb）または保存先フォルダを直接指定できます。「検証 & 適用」を押して検証に成功すると即座に読み込まれます。"
         ),
         QAItem(
             id: "qa-4",
@@ -43,19 +43,19 @@ struct HelpView: View {
             id: "qa-5",
             category: "使い方",
             question: "表示枠（2h / 5h / 1d / 7d / 30d）の切り替えや上限変更は？",
-            answer: "ウィジェット上部の「すべて / 2時間 / 5時間 / 1日 / 週次 / 月次」セグメントで瞬時に表示を切り替えられます。また、右上の「設定」ボタンから、各サービスごとにどの枠を常時表示するか（表示枠トグル）や、トークン/リクエスト上限値を自由に変更できます。"
+            answer: "メイン画面上部の「要点 / 全枠」スイッチで、最重要枠のみを表示するコンパクト表示と全有効枠を表示する詳細表示をワンクリックで切り替えられます。また、「設定」画面から各サービスごとにどの枠を有効にするか（表示枠トグル）や、トークン/リクエスト上限値を自由に変更できます。"
         ),
         QAItem(
             id: "qa-6",
             category: "使い方",
             question: "メニューバーに表示されるパーセントは何を表していますか？",
-            answer: "各サービスの「現在もっとも逼迫している（残量が少ない）制限枠の残りパーセント」を表しています。たとえば 2時間枠や週次枠のいずれかが上限に近づくと、その枠の残量に応じて数値が下がり、注意色（黄色・赤色）で警告します。"
+            answer: "各サービスの「現在もっとも逼迫している（残量が少ない）制限枠の残りパーセント」（例: GPT 残44%）を表しています。残量が 15% 未満になると ⚠️ マークで警告します。"
         ),
         QAItem(
             id: "qa-7",
             category: "使い方",
             question: "デスクトップウィジェットとして画面上に常時表示できますか？",
-            answer: "メニューバーのカード下部にある「ウィジェットを表示」ボタンをクリックすると、デスクトップ上にドラッグ移動可能なフローティングカードウィンドウが表示されます。"
+            answer: "メニューバーのカード下部にある「ウィジェット表示」ボタンをクリックすると、デスクトップ上にドラッグ移動可能なフローティングカードウィンドウが表示されます。"
         ),
         QAItem(
             id: "qa-8",
@@ -77,7 +77,7 @@ struct HelpView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             // Top Bar
             HStack(spacing: 8) {
                 Button {
@@ -87,8 +87,8 @@ struct HelpView: View {
                         Image(systemName: "chevron.left")
                         Text("戻る")
                     }
-                    .font(.system(size: 13, weight: .medium))
-                    .padding(.horizontal, 9)
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -99,31 +99,31 @@ struct HelpView: View {
                 .buttonStyle(.plain)
 
                 Text("ヘルプ & よくある質問")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 14, weight: .bold))
 
                 Spacer()
 
-                Text("v1.1.0")
-                    .font(.system(size: 12))
+                Text("v1.2")
+                    .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
 
             // About AIMeter Card
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 7) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
                     Image(systemName: "gauge.with.needle.fill")
-                        .font(.system(size: 15))
+                        .font(.system(size: 13))
                         .foregroundStyle(.tint)
                     Text("AIMeter について")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 12.5, weight: .bold))
                 }
 
-                Text("Mac 内で利用中の各 AI ツール（Cursor, Windsurf, Claude Code, GitHub Copilot, Gemini, OpenAI 等）のローカルログを直接解析し、リアルタイムの使用量・残量メーターと利用額を可視化するメニューバー＆ウィジェットアプリです。")
-                    .font(.system(size: 13))
+                Text("Mac 内で利用中の各 AI ツール（Cursor, Windsurf, Claude Code, GitHub Copilot, Gemini, OpenAI 等）のローカルログを直接解析し、リアルタイムの使用量・残量メーターとAPI換算コストを可視化するメニューバー＆ウィジェットアプリです。")
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
-                    .lineSpacing(3)
+                    .lineSpacing(2.5)
             }
-            .padding(12)
+            .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.accentColor.opacity(0.06))
@@ -136,18 +136,18 @@ struct HelpView: View {
             // Search Filter
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13))
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                 TextField("質問やキーワードを検索...", text: $searchText)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13))
+                    .font(.system(size: 12))
 
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 13))
+                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -162,10 +162,10 @@ struct HelpView: View {
 
             // Q&A List
             ScrollView {
-                VStack(spacing: 10) {
+                VStack(spacing: 8) {
                     if filteredQAs.isEmpty {
                         Text("該当する質問が見つかりませんでした。")
-                            .font(.system(size: 13))
+                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 24)
@@ -179,8 +179,6 @@ struct HelpView: View {
             }
             .frame(maxHeight: 340)
         }
-        .padding(16)
-        .frame(width: 480)
     }
 
     @ViewBuilder

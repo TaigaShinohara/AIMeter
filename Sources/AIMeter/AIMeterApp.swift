@@ -2,627 +2,50 @@ import SwiftUI
 import AppKit
 import Foundation
 import Security
+import ServiceManagement
+import AIMeterCore
 
-// MARK: - Limit Period Type
-enum LimitPeriod: String, CaseIterable, Codable, Identifiable {
-    case twoHours = "2h"
-    case fiveHours = "5h"
-    case daily = "1d"
-    case weekly = "7d"
-    case monthly = "30d"
+// MARK: - Notifications
+extension Notification.Name {
+    static let showDesktopWidgetRequest = Notification.Name("com.local.AIMeter.showDesktopWidgetRequest")
+}
 
-    var id: String { rawValue }
+// MARK: - Launch at Login Manager
+@MainActor
+final class LaunchAtLoginManager: ObservableObject {
+    static let shared = LaunchAtLoginManager()
 
-    var label: String {
-        switch self {
-        case .twoHours: return "2時間"
-        case .fiveHours: return "5時間"
-        case .daily: return "1日"
-        case .weekly: return "週次"
-        case .monthly: return "月次"
+    @Published var isEnabled: Bool = false
+
+    init() {
+        refresh()
+    }
+
+    func refresh() {
+        if #available(macOS 13.0, *) {
+            isEnabled = (SMAppService.mainApp.status == .enabled)
         }
     }
 
-    var shortLabel: String {
-        switch self {
-        case .twoHours: return "2h"
-        case .fiveHours: return "5h"
-        case .daily: return "1d"
-        case .weekly: return "1w"
-        case .monthly: return "1m"
-        }
-    }
-}
-
-// MARK: - MenuBar Display Mode
-enum MenuBarDisplayMode: String, CaseIterable, Codable, Identifiable {
-    case smart = "smart"       // 最も逼迫しているサービス1つ（推奨: ノッチ衝突完全回避）
-    case compact = "compact"   // 上位2サービス
-    case iconOnly = "iconOnly" // 残り数値のみ
-    case all = "all"           // 従来の全表示
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .smart: return "最逼迫のみ (推奨)"
-        case .compact: return "コンパクト (2つ)"
-        case .iconOnly: return "数値のみ"
-        case .all: return "すべて表示"
-        }
-    }
-}
-
-// MARK: - Service Bottleneck Snapshot
-struct ServiceBottleneck: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let shortName: String
-    let iconName: String
-    let remainingPercent: Int
-    let remainingRatio: Double
-    let bottleneckPeriod: LimitPeriod
-}
-
-// MARK: - Unit Helper
-func providerUnit(for providerId: String) -> String {
-    let lower = providerId.lowercased()
-    if lower.contains("cursor") || lower.contains("copilot") || lower.contains("windsurf") || lower.contains("poe") || lower.contains("devin") {
-        return "req"
-    }
-    return "tokens"
-}
-
-func formatCompactUsage(_ count: Int, unit: String) -> String {
-    if unit == "req" {
-        if count >= 10_000 {
-            return String(format: "%.0fK", Double(count) / 1_000.0)
-        } else if count >= 1_000 {
-            return String(format: "%.1fK", Double(count) / 1_000.0)
-        } else {
-            return "\(max(0, count))"
-        }
-    } else {
-        return formatCompactTokenCount(count)
-    }
-}
-
-// MARK: - Per-Period Usage & Limit Snapshot
-struct PeriodUsageMetric: Equatable, Identifiable {
-    let period: LimitPeriod
-    var usedTokens: Int
-    var limitTokens: Int
-    var serverUsedPercent: Double? = nil
-    var resetTimestamp: Int? = nil
-
-    var id: String { period.rawValue }
-
-    var effectiveLimitTokens: Int {
-        if let pct = serverUsedPercent, pct > 0.5, usedTokens > 0 {
-            return max(usedTokens, Int((Double(usedTokens) / (pct / 100.0)).rounded()))
-        }
-        return limitTokens
-    }
-
-    var remainingTokens: Int {
-        if let pct = serverUsedPercent {
-            let ratio = min(1.0, max(0.0, (100.0 - pct) / 100.0))
-            if usedTokens > 0, pct > 0.5 {
-                return max(0, effectiveLimitTokens - usedTokens)
+    func setEnabled(_ enable: Bool) {
+        if #available(macOS 13.0, *) {
+            do {
+                if enable {
+                    if SMAppService.mainApp.status != .enabled {
+                        try SMAppService.mainApp.register()
+                    }
+                } else {
+                    if SMAppService.mainApp.status == .enabled {
+                        try SMAppService.mainApp.unregister()
+                    }
+                }
+                isEnabled = (SMAppService.mainApp.status == .enabled)
+            } catch {
+                print("[AIMeter] Failed to update Launch at Login: \(error)")
+                refresh()
             }
-            return max(0, Int((Double(limitTokens) * ratio).rounded()))
-        }
-        return max(0, effectiveLimitTokens - usedTokens)
-    }
-
-    var remainingRatio: Double {
-        if let pct = serverUsedPercent {
-            return min(1.0, max(0.0, (100.0 - pct) / 100.0))
-        }
-        guard effectiveLimitTokens > 0 else { return 0 }
-        return min(1.0, max(0.0, Double(remainingTokens) / Double(effectiveLimitTokens)))
-    }
-
-    var remainingPercent: Int {
-        Int((remainingRatio * 100).rounded())
-    }
-}
-
-// MARK: - Custom Subscription / Provider Configuration
-struct CustomSubscriptionConfig: Codable, Identifiable, Equatable {
-    var id: String
-    var name: String
-    var shortName: String
-    var iconName: String
-    var isEnabled: Bool
-    var showInMenuBar: Bool
-    var enabledPeriodRawValues: [String]
-
-    var limit2h: Int = 500_000
-    var limit5h: Int
-    var limitDaily: Int
-    var limitWeekly: Int
-    var limitMonthly: Int
-
-    var manualUsed2h: Int = 0
-    var manualUsed5h: Int
-    var manualUsedDaily: Int
-    var manualUsedWeekly: Int
-    var manualUsedMonthly: Int
-
-    var usedCostUSD: Double
-    var budgetUSD: Double
-    var statusNote: String
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, shortName, iconName, isEnabled, showInMenuBar, enabledPeriodRawValues
-        case limit2h, limit5h, limitDaily, limitWeekly, limitMonthly
-        case manualUsed2h, manualUsed5h, manualUsedDaily, manualUsedWeekly, manualUsedMonthly
-        case usedCostUSD, budgetUSD, statusNote
-    }
-
-    init(
-        id: String,
-        name: String,
-        shortName: String,
-        iconName: String,
-        isEnabled: Bool,
-        showInMenuBar: Bool,
-        enabledPeriodRawValues: [String],
-        limit2h: Int = 500_000,
-        limit5h: Int,
-        limitDaily: Int,
-        limitWeekly: Int,
-        limitMonthly: Int,
-        manualUsed2h: Int = 0,
-        manualUsed5h: Int,
-        manualUsedDaily: Int,
-        manualUsedWeekly: Int,
-        manualUsedMonthly: Int,
-        usedCostUSD: Double,
-        budgetUSD: Double,
-        statusNote: String
-    ) {
-        self.id = id
-        self.name = name
-        self.shortName = shortName
-        self.iconName = iconName
-        self.isEnabled = isEnabled
-        self.showInMenuBar = showInMenuBar
-        self.enabledPeriodRawValues = enabledPeriodRawValues
-        self.limit2h = limit2h
-        self.limit5h = limit5h
-        self.limitDaily = limitDaily
-        self.limitWeekly = limitWeekly
-        self.limitMonthly = limitMonthly
-        self.manualUsed2h = manualUsed2h
-        self.manualUsed5h = manualUsed5h
-        self.manualUsedDaily = manualUsedDaily
-        self.manualUsedWeekly = manualUsedWeekly
-        self.manualUsedMonthly = manualUsedMonthly
-        self.usedCostUSD = usedCostUSD
-        self.budgetUSD = budgetUSD
-        self.statusNote = statusNote
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(String.self, forKey: .id)
-        name = try c.decode(String.self, forKey: .name)
-        shortName = try c.decode(String.self, forKey: .shortName)
-        iconName = try c.decodeIfPresent(String.self, forKey: .iconName) ?? "cpu.fill"
-        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
-        showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar) ?? false
-        enabledPeriodRawValues = try c.decodeIfPresent([String].self, forKey: .enabledPeriodRawValues) ?? ["30d"]
-        limit5h = try c.decodeIfPresent(Int.self, forKey: .limit5h) ?? 500_000
-        limit2h = try c.decodeIfPresent(Int.self, forKey: .limit2h) ?? max(1, limit5h / 2)
-        limitDaily = try c.decodeIfPresent(Int.self, forKey: .limitDaily) ?? 2_000_000
-        limitWeekly = try c.decodeIfPresent(Int.self, forKey: .limitWeekly) ?? 10_000_000
-        limitMonthly = try c.decodeIfPresent(Int.self, forKey: .limitMonthly) ?? 30_000_000
-        manualUsed2h = try c.decodeIfPresent(Int.self, forKey: .manualUsed2h) ?? 0
-        manualUsed5h = try c.decodeIfPresent(Int.self, forKey: .manualUsed5h) ?? 0
-        manualUsedDaily = try c.decodeIfPresent(Int.self, forKey: .manualUsedDaily) ?? 0
-        manualUsedWeekly = try c.decodeIfPresent(Int.self, forKey: .manualUsedWeekly) ?? 0
-        manualUsedMonthly = try c.decodeIfPresent(Int.self, forKey: .manualUsedMonthly) ?? 0
-        usedCostUSD = try c.decodeIfPresent(Double.self, forKey: .usedCostUSD) ?? 0.0
-        budgetUSD = try c.decodeIfPresent(Double.self, forKey: .budgetUSD) ?? 20.0
-        statusNote = try c.decodeIfPresent(String.self, forKey: .statusNote) ?? ""
-    }
-
-    func isPeriodEnabled(_ period: LimitPeriod) -> Bool {
-        enabledPeriodRawValues.contains(period.rawValue)
-    }
-
-    mutating func setPeriod(_ period: LimitPeriod, enabled: Bool) {
-        if enabled {
-            if !enabledPeriodRawValues.contains(period.rawValue) {
-                enabledPeriodRawValues.append(period.rawValue)
-            }
-        } else if enabledPeriodRawValues.count > 1 {
-            enabledPeriodRawValues.removeAll { $0 == period.rawValue }
         }
     }
-
-    mutating func sanitize() {
-        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { name = "Custom AI" }
-        if shortName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { shortName = "AI" }
-        if enabledPeriodRawValues.isEmpty { enabledPeriodRawValues = [LimitPeriod.monthly.rawValue] }
-        if limit2h < 1 { limit2h = 1 }
-        if limit5h < 1 { limit5h = 1 }
-        if limitDaily < 1 { limitDaily = 1 }
-        if limitWeekly < 1 { limitWeekly = 1 }
-        if limitMonthly < 1 { limitMonthly = 1 }
-        if manualUsed2h < 0 { manualUsed2h = 0 }
-        if manualUsed5h < 0 { manualUsed5h = 0 }
-        if manualUsedDaily < 0 { manualUsedDaily = 0 }
-        if manualUsedWeekly < 0 { manualUsedWeekly = 0 }
-        if manualUsedMonthly < 0 { manualUsedMonthly = 0 }
-        if usedCostUSD < 0 { usedCostUSD = 0 }
-        if budgetUSD < 0 { budgetUSD = 0 }
-    }
-
-    // 1. xAI Grok / GrokBot (2h burst + 1d cooldown + 7d compute pool)
-    static func grokbotPreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "grokbot",
-            name: "Grok / GrokBot",
-            shortName: "Grok",
-            iconName: "sparkles",
-            isEnabled: true,
-            showInMenuBar: true,
-            enabledPeriodRawValues: ["2h", "1d", "7d"],
-            limit2h: 200_000,
-            limit5h: 500_000,
-            limitDaily: 1_500_000,
-            limitWeekly: 10_000_000,
-            limitMonthly: 40_000_000,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 30.0,
-            budgetUSD: 30.0,
-            statusNote: "SuperGrok / Bot"
-        )
-    }
-
-    // 2. Anthropic Claude (5h rolling window + 7d weekly ceiling)
-    static func claudePreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "claude",
-            name: "Anthropic Claude",
-            shortName: "Cld",
-            iconName: "brain.head.profile",
-            isEnabled: true,
-            showInMenuBar: true,
-            enabledPeriodRawValues: ["5h", "7d"],
-            limit2h: 600_000,
-            limit5h: 1_500_000,
-            limitDaily: 4_000_000,
-            limitWeekly: 15_000_000,
-            limitMonthly: 45_000_000,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 20.0,
-            budgetUSD: 20.0,
-            statusNote: "Pro / Max"
-        )
-    }
-
-    // 3. Cursor (Daily burst + Monthly credit/token pool)
-    static func cursorPreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "cursor",
-            name: "Cursor",
-            shortName: "Cur",
-            iconName: "terminal.fill",
-            isEnabled: true,
-            showInMenuBar: false,
-            enabledPeriodRawValues: ["1d", "30d"],
-            limit2h: 25,
-            limit5h: 50,
-            limitDaily: 50,
-            limitWeekly: 200,
-            limitMonthly: 500,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 20.0,
-            budgetUSD: 20.0,
-            statusNote: "Pro / Ultra"
-        )
-    }
-
-    // 4. Windsurf (Daily + Weekly rolling + Monthly flow pool)
-    static func windsurfPreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "windsurf",
-            name: "Windsurf",
-            shortName: "Wind",
-            iconName: "wind",
-            isEnabled: true,
-            showInMenuBar: false,
-            enabledPeriodRawValues: ["1d", "7d", "30d"],
-            limit2h: 1_500,
-            limit5h: 3_000,
-            limitDaily: 5_000,
-            limitWeekly: 20_000,
-            limitMonthly: 50_000,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 20.0,
-            budgetUSD: 20.0,
-            statusNote: "Pro"
-        )
-    }
-
-    // 5. GitHub Copilot (Monthly 300-1500 Premium Requests / AI Credits)
-    static func copilotPreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "copilot",
-            name: "GitHub Copilot",
-            shortName: "Cop",
-            iconName: "chevron.left.forwardslash.chevron.right",
-            isEnabled: true,
-            showInMenuBar: false,
-            enabledPeriodRawValues: ["30d"],
-            limit2h: 30,
-            limit5h: 50,
-            limitDaily: 100,
-            limitWeekly: 150,
-            limitMonthly: 300,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 10.0,
-            budgetUSD: 10.0,
-            statusNote: "Premium Reqs"
-        )
-    }
-
-    // 6. Devin (Daily + Weekly + Monthly ACU / usage limits)
-    static func devinPreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "devin",
-            name: "Devin",
-            shortName: "Dev",
-            iconName: "cpu",
-            isEnabled: true,
-            showInMenuBar: false,
-            enabledPeriodRawValues: ["1d", "7d", "30d"],
-            limit2h: 5,
-            limit5h: 10,
-            limitDaily: 20,
-            limitWeekly: 60,
-            limitMonthly: 200,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 20.0,
-            budgetUSD: 20.0,
-            statusNote: "ACU Pool"
-        )
-    }
-
-    // 7. Perplexity Pro (Daily 300+ Pro searches + Monthly pool)
-    static func perplexityPreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "perplexity",
-            name: "Perplexity Pro",
-            shortName: "Pplx",
-            iconName: "globe",
-            isEnabled: true,
-            showInMenuBar: false,
-            enabledPeriodRawValues: ["1d", "30d"],
-            limit2h: 60,
-            limit5h: 150,
-            limitDaily: 300,
-            limitWeekly: 1_500,
-            limitMonthly: 6_000,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 20.0,
-            budgetUSD: 20.0,
-            statusNote: "Pro Search"
-        )
-    }
-
-    // 8. DeepSeek (1d + 30d API token pool)
-    static func deepseekPreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "deepseek",
-            name: "DeepSeek",
-            shortName: "DS",
-            iconName: "wave.3.right",
-            isEnabled: true,
-            showInMenuBar: false,
-            enabledPeriodRawValues: ["1d", "30d"],
-            limit2h: 1_000_000,
-            limit5h: 2_500_000,
-            limitDaily: 10_000_000,
-            limitWeekly: 50_000_000,
-            limitMonthly: 150_000_000,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 10.0,
-            budgetUSD: 20.0,
-            statusNote: "V3 / R1 API"
-        )
-    }
-
-    // 9. Poe (Daily / Monthly Compute Points: 1M points/mo)
-    static func poePreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "poe",
-            name: "Poe",
-            shortName: "Poe",
-            iconName: "bubble.left.and.bubble.right",
-            isEnabled: true,
-            showInMenuBar: false,
-            enabledPeriodRawValues: ["1d", "30d"],
-            limit2h: 20_000,
-            limit5h: 50_000,
-            limitDaily: 100_000,
-            limitWeekly: 300_000,
-            limitMonthly: 1_000_000,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 20.0,
-            budgetUSD: 20.0,
-            statusNote: "Compute Pts"
-        )
-    }
-
-    // 10. Trae (Monthly Fast Queue)
-    static func traePreset() -> CustomSubscriptionConfig {
-        CustomSubscriptionConfig(
-            id: "trae",
-            name: "Trae AI",
-            shortName: "Trae",
-            iconName: "bolt.horizontal",
-            isEnabled: true,
-            showInMenuBar: false,
-            enabledPeriodRawValues: ["30d"],
-            limit2h: 30,
-            limit5h: 60,
-            limitDaily: 100,
-            limitWeekly: 250,
-            limitMonthly: 600,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 10.0,
-            budgetUSD: 10.0,
-            statusNote: "Fast Queue"
-        )
-    }
-
-    static func preset(forId id: String) -> CustomSubscriptionConfig? {
-        switch id {
-        case "grokbot": return .grokbotPreset()
-        case "claude": return .claudePreset()
-        case "cursor": return .cursorPreset()
-        case "windsurf": return .windsurfPreset()
-        case "copilot": return .copilotPreset()
-        case "devin": return .devinPreset()
-        case "perplexity": return .perplexityPreset()
-        case "deepseek": return .deepseekPreset()
-        case "poe": return .poePreset()
-        case "trae": return .traePreset()
-        default: return nil
-        }
-    }
-
-    static func blankCustom() -> CustomSubscriptionConfig {
-        let shortId = String(UUID().uuidString.prefix(6)).lowercased()
-        return CustomSubscriptionConfig(
-            id: "custom_\(shortId)",
-            name: "新規サービス",
-            shortName: "Sub",
-            iconName: "cpu.fill",
-            isEnabled: true,
-            showInMenuBar: false,
-            enabledPeriodRawValues: ["5h", "1d", "7d", "30d"],
-            limit2h: 200_000,
-            limit5h: 500_000,
-            limitDaily: 2_000_000,
-            limitWeekly: 10_000_000,
-            limitMonthly: 30_000_000,
-            manualUsed2h: 0,
-            manualUsed5h: 0,
-            manualUsedDaily: 0,
-            manualUsedWeekly: 0,
-            manualUsedMonthly: 0,
-            usedCostUSD: 20.0,
-            budgetUSD: 20.0,
-            statusNote: ""
-        )
-    }
-}
-
-// MARK: - Local JSON Model
-struct ProviderPeriodUsageJSON: Codable, Equatable {
-    var twoHours: Int?
-    var fiveHours: Int?
-    var daily: Int?
-    var weekly: Int?
-    var monthly: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case twoHours = "2h"
-        case fiveHours = "5h"
-        case daily = "1d"
-        case weekly = "7d"
-        case monthly = "30d"
-    }
-}
-
-struct ProviderPeriodPercentJSON: Codable, Equatable {
-    var twoHours: Double?
-    var fiveHours: Double?
-    var daily: Double?
-    var weekly: Double?
-    var monthly: Double?
-
-    enum CodingKeys: String, CodingKey {
-        case twoHours = "2h"
-        case fiveHours = "5h"
-        case daily = "1d"
-        case weekly = "7d"
-        case monthly = "30d"
-    }
-}
-
-struct CustomProviderUsageJSON: Codable, Equatable {
-    var usedByPeriod: ProviderPeriodUsageJSON?
-    var serverUsedPercentByPeriod: ProviderPeriodPercentJSON?
-    var resetAtByPeriod: ProviderPeriodUsageJSON?
-    var costUSD: Double?
-    var status: String?
-}
-
-struct LocalUsageData: Codable, Equatable {
-    var openaiUsedTokens: Int?
-    var openaiCostUSD: Double?
-    var geminiUsedTokens: Int?
-    var geminiCostUSD: Double?
-
-    var openaiUsedByPeriod: ProviderPeriodUsageJSON?
-    var geminiUsedByPeriod: ProviderPeriodUsageJSON?
-
-    var openaiServerUsedPercentByPeriod: ProviderPeriodPercentJSON?
-    var openaiResetAtByPeriod: ProviderPeriodUsageJSON?
-    var openaiPlanType: String?
-    var openaiCreditBalance: Double?
-
-    var providers: [String: CustomProviderUsageJSON]?
-    var detectedProviders: [String]?
-    var source: String?
-    var updatedAt: String?
 }
 
 // MARK: - Keychain Helper
@@ -662,147 +85,15 @@ enum KeychainHelper {
     }
 }
 
-// MARK: - Pure Parsers & Calculations (Testable)
-enum UsageParser {
-    static func startOfMonthUnixTimestamp(for date: Date = Date()) -> Int {
-        var utcCalendar = Calendar(identifier: .gregorian)
-        utcCalendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
-        let components = utcCalendar.dateComponents([.year, .month], from: date)
-        let startOfMonth = utcCalendar.date(from: components) ?? date
-        return Int(startOfMonth.timeIntervalSince1970)
-    }
-
-    static func startTimestamp(for period: LimitPeriod, now: Date = Date()) -> Int {
-        var utcCalendar = Calendar(identifier: .gregorian)
-        utcCalendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
-        switch period {
-        case .twoHours:
-            return Int(now.addingTimeInterval(-2 * 3600).timeIntervalSince1970)
-        case .fiveHours:
-            return Int(now.addingTimeInterval(-5 * 3600).timeIntervalSince1970)
-        case .daily:
-            let startOfDay = utcCalendar.startOfDay(for: now)
-            return Int(startOfDay.timeIntervalSince1970)
-        case .weekly:
-            let sevenDaysAgo = utcCalendar.date(byAdding: .day, value: -6, to: utcCalendar.startOfDay(for: now)) ?? now.addingTimeInterval(-7 * 86400)
-            return Int(sevenDaysAgo.timeIntervalSince1970)
-        case .monthly:
-            return startOfMonthUnixTimestamp(for: now)
-        }
-    }
-
-    struct BucketTokenRecord: Equatable {
-        let startTime: Int
-        let endTime: Int
-        let tokens: Int
-    }
-
-    static func parseOpenAIUsagePageWithBuckets(data: Data) throws -> (buckets: [BucketTokenRecord], totalTokens: Int, nextPage: String?) {
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw URLError(.cannotParseResponse)
-        }
-        var totalTokens = 0
-        var records: [BucketTokenRecord] = []
-        if let buckets = json["data"] as? [[String: Any]] {
-            for bucket in buckets {
-                let bStart = parseIntValue(bucket["start_time"])
-                let bEnd = parseIntValue(bucket["end_time"])
-                var bucketTokens = 0
-                if let results = bucket["results"] as? [[String: Any]] {
-                    for res in results {
-                        let input = parseIntValue(res["input_tokens"])
-                        let output = parseIntValue(res["output_tokens"])
-                        bucketTokens += (input + output)
-                    }
-                }
-                totalTokens += bucketTokens
-                records.append(BucketTokenRecord(startTime: bStart, endTime: bEnd, tokens: bucketTokens))
-            }
-        }
-        let hasMore = (json["has_more"] as? Bool) ?? true
-        let nextPage = hasMore ? (json["next_page"] as? String) : nil
-        return (records, totalTokens, (nextPage?.isEmpty == false) ? nextPage : nil)
-    }
-
-    static func parseOpenAIUsagePage(data: Data) throws -> (tokens: Int, nextPage: String?) {
-        let parsed = try parseOpenAIUsagePageWithBuckets(data: data)
-        return (parsed.totalTokens, parsed.nextPage)
-    }
-
-    static func parseOpenAICostsPage(data: Data) throws -> (costUSD: Double, nextPage: String?) {
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw URLError(.cannotParseResponse)
-        }
-        var totalCost = 0.0
-        if let buckets = json["data"] as? [[String: Any]] {
-            for bucket in buckets {
-                if let results = bucket["results"] as? [[String: Any]] {
-                    for res in results {
-                        if let amountObj = res["amount"] as? [String: Any] {
-                            totalCost += parseDoubleValue(amountObj["value"])
-                        }
-                    }
-                }
-            }
-        }
-        let hasMore = (json["has_more"] as? Bool) ?? true
-        let nextPage = hasMore ? (json["next_page"] as? String) : nil
-        return (totalCost, (nextPage?.isEmpty == false) ? nextPage : nil)
-    }
-
-    static func parseGeminiMonitoringSeries(data: Data) throws -> Int {
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw URLError(.cannotParseResponse)
-        }
-        guard let series = json["timeSeries"] as? [[String: Any]] else {
-            return 0
-        }
-        var total = 0
-        for item in series {
-            if let points = item["points"] as? [[String: Any]] {
-                for pt in points {
-                    if let valObj = pt["value"] as? [String: Any] {
-                        total += parseIntValue(valObj["int64Value"] ?? valObj["doubleValue"])
-                    }
-                }
-            }
-        }
-        return total
-    }
-
-    static func parseIntValue(_ anyVal: Any?) -> Int {
-        if let intVal = anyVal as? Int {
-            return intVal
-        } else if let numVal = anyVal as? NSNumber {
-            return numVal.intValue
-        } else if let strVal = anyVal as? String, let parsed = Int(strVal) {
-            return parsed
-        } else if let strVal = anyVal as? String, let parsedDouble = Double(strVal) {
-            return Int(parsedDouble.rounded())
-        }
-        return 0
-    }
-
-    static func parseDoubleValue(_ anyVal: Any?) -> Double {
-        if let dblVal = anyVal as? Double {
-            return dblVal
-        } else if let intVal = anyVal as? Int {
-            return Double(intVal)
-        } else if let numVal = anyVal as? NSNumber {
-            return numVal.doubleValue
-        } else if let strVal = anyVal as? String, let parsed = Double(strVal) {
-            return parsed
-        }
-        return 0.0
-    }
-}
-
 // MARK: - Usage Monitor
 @MainActor
 final class UsageMonitor: ObservableObject {
     @AppStorage("didCalibrateRealLimitsV1") var didCalibrateRealLimitsV1: Bool = false
     @AppStorage("didAutoSeedLocalProvidersV2") var didAutoSeedLocalProvidersV2: Bool = false
-    @AppStorage("hasCompletedSetupWizard") var hasCompletedSetupWizard: Bool = false
+    @AppStorage("didMigrateHonestCostsV3") var didMigrateHonestCostsV3: Bool = false
+    @AppStorage("hasCompletedSetupWizard") var hasCompletedSetupWizard: Bool = true
+    @AppStorage("autoShowWidgetOnLaunch") var autoShowWidgetOnLaunch: Bool = true
+    @Published var hasAutoOpenedWidgetOnLaunch: Bool = false
     @AppStorage("customProviderPathsJSON") var customProviderPathsJSON: String = "{}"
     @AppStorage("openaiAdminKey") var legacyOpenaiAdminKey: String = ""
     @Published var openaiAdminKey: String = "" {
@@ -841,6 +132,8 @@ final class UsageMonitor: ObservableObject {
     // Built-in Provider Visibility & Period Toggles
     @AppStorage("showOpenAISection") var showOpenAISection: Bool = true
     @AppStorage("showGeminiSection") var showGeminiSection: Bool = true
+    @AppStorage("showOpenAIInMenuBar") var showOpenAIInMenuBar: Bool = true
+    @AppStorage("showGeminiInMenuBar") var showGeminiInMenuBar: Bool = true
     @AppStorage("openaiEnabledPeriodsCSV") var openaiEnabledPeriodsCSV: String = "5h,7d,30d"
     @AppStorage("geminiEnabledPeriodsCSV") var geminiEnabledPeriodsCSV: String = "5h,1d,7d,30d"
 
@@ -876,6 +169,7 @@ final class UsageMonitor: ObservableObject {
     @AppStorage("menuBarDisplayMode") var menuBarDisplayMode: String = "smart"
     @AppStorage("isDetailedView") var isDetailedView: Bool = false
     @AppStorage("isWidgetPinned") var isWidgetPinned: Bool = true
+    @Published var isDesktopWidgetOpen: Bool = false
 
     // OpenAI Used Tokens per Period
     @Published var openaiUsed2h: Int = 0
@@ -1034,6 +328,7 @@ final class UsageMonitor: ObservableObject {
         } else {
             geminiEnabledPeriodsCSV = ordered.isEmpty ? "30d" : ordered
         }
+        isDetailedView = true
     }
 
     func sanitizeSettings() {
@@ -1192,7 +487,7 @@ final class UsageMonitor: ObservableObject {
 
     var activeBottlenecks: [ServiceBottleneck] {
         var list: [ServiceBottleneck] = []
-        if showOpenAISection, !openaiMetrics.isEmpty {
+        if showOpenAISection && showOpenAIInMenuBar, !openaiMetrics.isEmpty {
             if let minMetric = openaiMetrics.min(by: { $0.remainingRatio < $1.remainingRatio }) {
                 list.append(ServiceBottleneck(
                     id: "openai",
@@ -1205,7 +500,7 @@ final class UsageMonitor: ObservableObject {
                 ))
             }
         }
-        if showGeminiSection, !geminiMetrics.isEmpty {
+        if showGeminiSection && showGeminiInMenuBar, !geminiMetrics.isEmpty {
             if let minMetric = geminiMetrics.min(by: { $0.remainingRatio < $1.remainingRatio }) {
                 list.append(ServiceBottleneck(
                     id: "gemini",
@@ -1245,24 +540,25 @@ final class UsageMonitor: ObservableObject {
         switch mode {
         case .smart:
             if let first = bottlenecks.first {
-                return "\(first.shortName):\(first.remainingPercent)%"
+                let prefix = first.remainingPercent < 15 ? "⚠️ " : ""
+                return "\(prefix)\(first.shortName) 残\(first.remainingPercent)%"
             }
             return "AIMeter"
         case .compact:
             let topTwo = bottlenecks.prefix(2)
-            return topTwo.map { "\($0.shortName):\($0.remainingPercent)%" }.joined(separator: " ")
+            return topTwo.map { "\($0.shortName) 残\($0.remainingPercent)%" }.joined(separator: " · ")
         case .iconOnly:
             if let first = bottlenecks.first {
-                return "\(first.remainingPercent)%"
+                return "残\(first.remainingPercent)%"
             }
             return "AIMeter"
         case .all:
             var segments: [String] = []
-            if showOpenAISection {
+            if showOpenAISection && showOpenAIInMenuBar {
                 let gptPct = Int((activeRatio(for: openaiMetrics) * 100).rounded())
                 segments.append("GPT:\(gptPct)%")
             }
-            if showGeminiSection {
+            if showGeminiSection && showGeminiInMenuBar {
                 let gemPct = Int((activeRatio(for: geminiMetrics) * 100).rounded())
                 segments.append("Gem:\(gemPct)%")
             }
@@ -1281,6 +577,7 @@ final class UsageMonitor: ObservableObject {
         defer {
             lastUpdated = Date()
             isRefreshing = false
+            SharedStore.reloadWidgetTimelines()
         }
 
         await runLocalCollectorScript()
@@ -1289,48 +586,58 @@ final class UsageMonitor: ObservableObject {
         if let localData {
             let monthlyOpenAI = max(0, localData.openaiUsedByPeriod?.monthly ?? localData.openaiUsedTokens ?? 0)
             openaiUsedTokens = monthlyOpenAI
-            openaiUsedWeekly = max(0, localData.openaiUsedByPeriod?.weekly ?? min(monthlyOpenAI, Int(Double(monthlyOpenAI) * 0.45)))
-            openaiUsedDaily = max(0, localData.openaiUsedByPeriod?.daily ?? min(openaiUsedWeekly, Int(Double(monthlyOpenAI) * 0.12)))
-            openaiUsed5h = max(0, localData.openaiUsedByPeriod?.fiveHours ?? min(openaiUsedDaily, Int(Double(monthlyOpenAI) * 0.05)))
-            openaiUsed2h = max(0, localData.openaiUsedByPeriod?.twoHours ?? min(openaiUsed5h, Int(Double(monthlyOpenAI) * 0.02)))
+            openaiUsedWeekly = max(0, localData.openaiUsedByPeriod?.weekly ?? 0)
+            openaiUsedDaily = max(0, localData.openaiUsedByPeriod?.daily ?? 0)
+            openaiUsed5h = max(0, localData.openaiUsedByPeriod?.fiveHours ?? 0)
+            openaiUsed2h = max(0, localData.openaiUsedByPeriod?.twoHours ?? 0)
             openaiServerPct = localData.openaiServerUsedPercentByPeriod
             openaiResetAt = localData.openaiResetAtByPeriod
             openaiCostUSD = max(0.0, localData.openaiCostUSD ?? 0.0)
 
             let monthlyGemini = max(0, localData.geminiUsedByPeriod?.monthly ?? localData.geminiUsedTokens ?? 0)
             geminiUsedTokens = monthlyGemini
-            geminiUsedWeekly = max(0, localData.geminiUsedByPeriod?.weekly ?? min(monthlyGemini, Int(Double(monthlyGemini) * 0.40)))
-            geminiUsedDaily = max(0, localData.geminiUsedByPeriod?.daily ?? min(geminiUsedWeekly, Int(Double(monthlyGemini) * 0.10)))
-            geminiUsed5h = max(0, localData.geminiUsedByPeriod?.fiveHours ?? min(geminiUsedDaily, Int(Double(monthlyGemini) * 0.04)))
-            geminiUsed2h = max(0, localData.geminiUsedByPeriod?.twoHours ?? min(geminiUsed5h, Int(Double(monthlyGemini) * 0.02)))
+            geminiUsedWeekly = max(0, localData.geminiUsedByPeriod?.weekly ?? 0)
+            geminiUsedDaily = max(0, localData.geminiUsedByPeriod?.daily ?? 0)
+            geminiUsed5h = max(0, localData.geminiUsedByPeriod?.fiveHours ?? 0)
+            geminiUsed2h = max(0, localData.geminiUsedByPeriod?.twoHours ?? 0)
             geminiCostUSD = max(0.0, localData.geminiCostUSD ?? 0.0)
 
             customProviderLiveUsage = localData.providers ?? [:]
             detectedProviderIds = localData.detectedProviders ?? []
 
-            // Automatically seed and clean up detected local accounts on first V2 run
-            if !didAutoSeedLocalProvidersV2 {
-                // Remove accidental duplicate suffixed entries if base entry exists
+            // Automatically seed and clean up detected local accounts on first V2/V3 run
+            if !didAutoSeedLocalProvidersV2 || !didMigrateHonestCostsV3 {
                 var seenBaseIds = Set<String>()
                 var cleaned: [CustomSubscriptionConfig] = []
                 for var item in customSubscriptions {
                     let base = item.id.split(separator: "_").first.map(String.init) ?? item.id
-                    if seenBaseIds.contains(base) {
-                        continue
+                    if !base.hasPrefix("custom") {
+                        if seenBaseIds.contains(base) {
+                            continue
+                        }
+                        seenBaseIds.insert(base)
+                        item.id = base
                     }
-                    seenBaseIds.insert(base)
-                    item.id = base
-                    // Clear legacy sample manual values on copilot/cursor so real local logs are shown
                     if base == "copilot" && item.manualUsedMonthly == 80 {
                         item.manualUsedDaily = 0
                         item.manualUsedWeekly = 0
                         item.manualUsedMonthly = 0
+                    }
+                    // Clear legacy hardcoded preset costs (10/20/30)
+                    if item.usedCostUSD == item.budgetUSD && (item.usedCostUSD == 10.0 || item.usedCostUSD == 20.0 || item.usedCostUSD == 30.0) {
+                        item.usedCostUSD = 0.0
+                    }
+                    // Update Windsurf periods to honest monthly only if still at legacy preset
+                    if base == "windsurf" && item.enabledPeriodRawValues == ["1d", "7d", "30d"] {
+                        item.enabledPeriodRawValues = ["30d"]
                     }
                     cleaned.append(item)
                 }
                 customSubscriptions = cleaned
                 autoAddDetectedSubscriptions()
                 didAutoSeedLocalProvidersV2 = true
+                didMigrateHonestCostsV3 = true
+                hasCompletedSetupWizard = true
             }
 
             if let plan = localData.openaiPlanType, !plan.isEmpty {
@@ -1655,37 +962,6 @@ final class UsageMonitor: ObservableObject {
 }
 
 // MARK: - Formatting Helpers
-func formatTokenCount(_ count: Int) -> String {
-    if count >= 1_000_000 {
-        return String(format: "%.2fM", Double(count) / 1_000_000.0)
-    } else if count >= 1_000 {
-        return String(format: "%.1fK", Double(count) / 1_000_000.0 * 1_000.0)
-    } else {
-        return "\(max(0, count))"
-    }
-}
-
-func formatCompactTokenCount(_ count: Int) -> String {
-    if count >= 100_000_000 {
-        return String(format: "%.0fM", Double(count) / 1_000_000.0)
-    } else if count >= 1_000_000 {
-        return String(format: "%.1fM", Double(count) / 1_000_000.0)
-    } else if count >= 10_000 {
-        return String(format: "%.0fK", Double(count) / 1_000.0)
-    } else if count >= 1_000 {
-        return String(format: "%.1fK", Double(count) / 1_000.0)
-    } else {
-        return "\(max(0, count))"
-    }
-}
-
-func formatResetTimestamp(_ epoch: Int?) -> String? {
-    guard let epoch, epoch > 0 else { return nil }
-    let date = Date(timeIntervalSince1970: TimeInterval(epoch))
-    let formatter = DateFormatter()
-    formatter.dateFormat = "MM/dd HH:mm"
-    return formatter.string(from: date)
-}
 
 func gaugeColor(for remainingRatio: Double) -> Color {
     if remainingRatio < 0.15 {
@@ -1753,15 +1029,15 @@ struct PeriodLimitRowView: View {
             // 3. Remaining Amount with Unit
             HStack(spacing: 2) {
                 Text("残 \(usageText)")
-                if unit == "req" {
-                    Text("req")
+                if unit != "tokens" {
+                    Text(unit)
                         .font(.system(size: 9.5))
                         .foregroundStyle(.tertiary)
                 }
             }
             .font(.system(size: 11).monospacedDigit())
             .foregroundStyle(.secondary)
-            .frame(width: 68, alignment: .trailing)
+            .frame(width: 74, alignment: .trailing)
 
             // 4. Remaining Percentage
             Text("\(pct)%")
@@ -1783,7 +1059,7 @@ struct ProviderUsageSection: View {
     let usedCostUSD: Double
     let budgetUSD: Double
     let metrics: [PeriodUsageMetric]
-    let selectedFilter: LimitPeriod?
+    var selectedFilter: LimitPeriod? = nil
     let highlightedPeriod: LimitPeriod?
     var unit: String = "tokens"
     var isDetailed: Bool = true
@@ -1810,7 +1086,7 @@ struct ProviderUsageSection: View {
     private var activeResetString: String? {
         for m in displayedMetrics {
             if let str = formatResetTimestamp(m.resetTimestamp) {
-                return "\(m.period.label)リセット \(str)"
+                return "↻ \(m.period.shortLabel) \(str)"
             }
         }
         return nil
@@ -1826,28 +1102,30 @@ struct ProviderUsageSection: View {
                     Text(title)
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
 
                     if !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
+                            .lineLimit(1)
                     }
 
                     Spacer()
 
                     if let resetInfo = activeResetString {
                         if usedCostUSD > 0 {
-                            Text(String(format: "$%.2f · %@", usedCostUSD, resetInfo))
-                                .font(.system(size: 11).monospacedDigit())
+                            Text(String(format: "API換算 $%.2f · %@", usedCostUSD, resetInfo))
+                                .font(.system(size: 10.5).monospacedDigit())
                                 .foregroundStyle(.secondary)
                         } else {
                             Text(resetInfo)
-                                .font(.system(size: 11).monospacedDigit())
+                                .font(.system(size: 10.5).monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
-                    } else if usedCostUSD > 0 || budgetUSD > 0 {
-                        Text(String(format: "$%.2f", usedCostUSD))
-                            .font(.system(size: 11).monospacedDigit())
+                    } else if usedCostUSD > 0 {
+                        Text(String(format: "API換算 $%.2f", usedCostUSD))
+                            .font(.system(size: 10.5).monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1873,14 +1151,38 @@ struct ProviderUsageSection: View {
     }
 }
 
-// MARK: - Settings View (Clean, Unified & Progressive)
+// MARK: - Unified Settings View (Single Place for Services, Paths, and Limits)
 struct SettingsPopoverView: View {
     @ObservedObject var monitor: UsageMonitor
-    var onOpenSetupWizard: (() -> Void)? = nil
+    @ObservedObject private var launchAtLogin = LaunchAtLoginManager.shared
     var onOpenHelp: (() -> Void)? = nil
     var onClose: (() -> Void)? = nil
+
     @State private var revealAdminKey: Bool = false
     @State private var expandedServiceIds: Set<String> = []
+    @State private var pathInputs: [String: String] = [:]
+    @State private var pathValidationResults: [String: LocalUsageCollector.ProviderPathScanResult] = [:]
+
+    private struct PresetOption: Identifiable {
+        let id: String
+        let label: String
+        let config: CustomSubscriptionConfig
+    }
+
+    private var presetOptions: [PresetOption] {
+        [
+            PresetOption(id: "claude", label: "Anthropic Claude", config: .claudePreset()),
+            PresetOption(id: "cursor", label: "Cursor", config: .cursorPreset()),
+            PresetOption(id: "windsurf", label: "Windsurf", config: .windsurfPreset()),
+            PresetOption(id: "copilot", label: "GitHub Copilot", config: .copilotPreset()),
+            PresetOption(id: "grokbot", label: "Grok / GrokBot", config: .grokbotPreset()),
+            PresetOption(id: "devin", label: "Devin", config: .devinPreset()),
+            PresetOption(id: "perplexity", label: "Perplexity Pro", config: .perplexityPreset()),
+            PresetOption(id: "deepseek", label: "DeepSeek", config: .deepseekPreset()),
+            PresetOption(id: "poe", label: "Poe", config: .poePreset()),
+            PresetOption(id: "trae", label: "Trae AI", config: .traePreset())
+        ]
+    }
 
     private func isExpanded(_ id: String) -> Bool {
         expandedServiceIds.contains(id)
@@ -1891,6 +1193,9 @@ struct SettingsPopoverView: View {
             expandedServiceIds.remove(id)
         } else {
             expandedServiceIds.insert(id)
+            if pathInputs[id] == nil {
+                pathInputs[id] = monitor.customProviderPaths[id] ?? ""
+            }
         }
     }
 
@@ -1899,7 +1204,7 @@ struct SettingsPopoverView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             // Top Bar
             HStack(spacing: 8) {
                 if let onClose {
@@ -1910,7 +1215,7 @@ struct SettingsPopoverView: View {
                             Image(systemName: "chevron.left")
                             Text("戻る")
                         }
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12.5, weight: .medium))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(
@@ -1923,55 +1228,34 @@ struct SettingsPopoverView: View {
                 }
 
                 Text("設定")
-                    .font(.system(size: 15, weight: .bold))
-
-                if let onOpenSetupWizard {
-                    Button {
-                        onOpenSetupWizard()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "sparkles")
-                            Text("初期セットアップ")
-                        }
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.tint)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.1))
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .help("サービス検出・パス設定ウィザードを開く")
-                }
+                    .font(.system(size: 14.5, weight: .bold))
 
                 if let onOpenHelp {
                     Button {
                         onOpenHelp()
                     } label: {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 3) {
                             Image(systemName: "questionmark.circle")
                             Text("ヘルプ")
                         }
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 3.5)
                         .background(
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(Color.primary.opacity(0.06))
                         )
                     }
                     .buttonStyle(.plain)
-                    .help("アプリの説明やQ&Aを見る")
+                    .help("仕組みやよくある質問を見る")
                 }
 
                 Spacer()
 
                 HStack(spacing: 4) {
                     Text("メニューバー:")
-                        .font(.system(size: 11.5))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                     Picker("", selection: $monitor.menuBarDisplayMode) {
                         ForEach(MenuBarDisplayMode.allCases) { mode in
@@ -1979,46 +1263,38 @@ struct SettingsPopoverView: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 135)
-                }
-            }
-
-            // Quick Add Service Bar
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 5) {
-                    presetButton(label: "+ Grok", id: "grokbot", preset: .grokbotPreset())
-                    presetButton(label: "+ Claude", id: "claude", preset: .claudePreset())
-                    presetButton(label: "+ Cursor", id: "cursor", preset: .cursorPreset())
-                    presetButton(label: "+ Windsurf", id: "windsurf", preset: .windsurfPreset())
-                    presetButton(label: "+ Copilot", id: "copilot", preset: .copilotPreset())
-                }
-                HStack(spacing: 5) {
-                    presetButton(label: "+ Devin", id: "devin", preset: .devinPreset())
-                    presetButton(label: "+ Perplexity", id: "perplexity", preset: .perplexityPreset())
-                    presetButton(label: "+ DeepSeek", id: "deepseek", preset: .deepseekPreset())
-                    presetButton(label: "+ Poe", id: "poe", preset: .poePreset())
-                    Button("+ 新規") {
-                        monitor.addSubscription(.blankCustom())
-                    }
                     .controlSize(.small)
-                    .font(.system(size: 11))
-
-                    Spacer()
-
-                    Button("自動検出") {
-                        monitor.autoAddDetectedSubscriptions()
-                    }
-                    .controlSize(.small)
-                    .font(.system(size: 11))
-                    .help("このMacにインストールされているAIツールを自動追加します")
+                    .frame(width: 128)
                 }
             }
 
             Divider()
 
+            // 起動・表示設定
+            HStack(spacing: 12) {
+                Toggle("ログイン時に自動起動", isOn: Binding(
+                    get: { launchAtLogin.isEnabled },
+                    set: { launchAtLogin.setEnabled($0) }
+                ))
+                .font(.system(size: 11))
+                .toggleStyle(.checkbox)
+                .help("Macの起動・ログイン時にAIMeterを自動的に起動します")
+
+                Spacer()
+
+                Toggle("起動時にウィジェット表示", isOn: $monitor.autoShowWidgetOnLaunch)
+                    .font(.system(size: 11))
+                    .toggleStyle(.checkbox)
+                    .help("アプリ起動時にデスクトップウィジェットを自動で表示します")
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 1)
+
+            Divider()
+
             // Unified Services List
             ScrollView {
-                VStack(spacing: 10) {
+                VStack(spacing: 8) {
                     // 1. OpenAI Service Card
                     openAIServiceCard
 
@@ -2030,18 +1306,49 @@ struct SettingsPopoverView: View {
                         customSubscriptionCard(sub: $sub)
                     }
                 }
-                .padding(.trailing, 4)
+                .padding(.trailing, 2)
             }
-            .frame(maxHeight: 360)
+            .frame(maxHeight: 350)
 
-            Divider()
+            // Clean Add / Auto-Detect Bar
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(presetOptions) { item in
+                        let added = isPresetAdded(item.id)
+                        Button(added ? "✓ \(item.label) (追加済)" : "+ \(item.label)") {
+                            monitor.addSubscription(item.config)
+                        }
+                        .disabled(added)
+                    }
+                    Divider()
+                    Button("＋ 新規カスタムサービスを作成...") {
+                        let newCustom = CustomSubscriptionConfig.blankCustom()
+                        monitor.addSubscription(newCustom)
+                        expandedServiceIds.insert(newCustom.id)
+                    }
+                } label: {
+                    Label("サービスを追加", systemImage: "plus.circle.fill")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .controlSize(.small)
 
-            // Footer
-            HStack {
-                Text("Mac内実ログ自動解析 · ゼロ外部通信")
+                Button {
+                    monitor.autoAddDetectedSubscriptions()
+                    Task {
+                        await monitor.refresh()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("再検出")
+                    }
                     .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
+                }
+                .controlSize(.small)
+                .help("このMacにインストールされているAIツールを自動検出して追加します")
+
                 Spacer()
+
                 Button {
                     monitor.sanitizeSettings()
                     Task {
@@ -2050,62 +1357,79 @@ struct SettingsPopoverView: View {
                     onClose?()
                 } label: {
                     Text("完了")
-                        .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 14)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .padding(.horizontal, 12)
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
+                .controlSize(.small)
             }
-        }
-        .onAppear {
-            NSApplication.shared.activate(ignoringOtherApps: true)
         }
     }
 
+    // MARK: - Status Badge Helper
     @ViewBuilder
-    private func presetButton(label: String, id: String, preset: CustomSubscriptionConfig) -> some View {
-        let added = isPresetAdded(id)
-        Button(added ? "\(label.dropFirst(2)) 追加済" : label) {
-            monitor.addSubscription(preset)
+    private func statusBadge(hasCustomPath: Bool, isDetected: Bool, customLabel: String? = nil) -> some View {
+        if hasCustomPath {
+            Text("手動パス")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(.blue)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1.5)
+                .background(RoundedRectangle(cornerRadius: 4).fill(Color.blue.opacity(0.12)))
+        } else if isDetected {
+            Text(customLabel ?? "実ログ検出")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(.green)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1.5)
+                .background(RoundedRectangle(cornerRadius: 4).fill(Color.green.opacity(0.12)))
+        } else {
+            Text("スタンバイ")
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1.5)
+                .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.06)))
         }
-        .disabled(added)
-        .controlSize(.small)
-        .font(.system(size: 11))
-        .foregroundStyle(added ? Color.secondary.opacity(0.6) : Color.primary)
     }
 
     // MARK: - OpenAI Service Card
     @ViewBuilder
     private var openAIServiceCard: some View {
         let isExpanded = isExpanded("openai")
+        let hasCustomPath = monitor.customProviderPaths["openai"] != nil
+        let isDetected = monitor.openaiUsedTokens > 0 || monitor.openaiServerPct != nil
+
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Toggle("", isOn: $monitor.showOpenAISection)
                     .labelsHidden()
+                    .toggleStyle(.checkbox)
                     .controlSize(.regular)
 
                 Image(systemName: "brain.head.profile")
                     .font(.system(size: 14))
-                    .foregroundStyle(.tint)
-                    .frame(width: 20)
+                    .foregroundStyle(monitor.showOpenAISection ? .primary : .secondary)
+                    .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text("OpenAI / Codex")
-                            .font(.system(size: 13.5, weight: .bold))
-                        Text("実ログ検出")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .foregroundStyle(.green)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1.5)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(Color.green.opacity(0.12)))
+                            .font(.system(size: 13, weight: .bold))
+                        statusBadge(hasCustomPath: hasCustomPath, isDetected: isDetected)
                     }
-                    Text("月間計: \(formatCompactTokenCount(monitor.openaiUsedTokens)) tokens · $\(String(format: "%.2f", monitor.openaiCostUSD))")
+                    let costPart = monitor.openaiCostUSD > 0 ? String(format: " · API換算 $%.2f", monitor.openaiCostUSD) : ""
+                    Text("月間: \(formatCompactTokenCount(monitor.openaiUsedTokens)) tokens\(costPart)")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
+
+                Toggle("メニューバー", isOn: $monitor.showOpenAIInMenuBar)
+                    .font(.system(size: 10.5))
+                    .controlSize(.mini)
+                    .disabled(!monitor.showOpenAISection)
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -2114,13 +1438,13 @@ struct SettingsPopoverView: View {
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        Text(isExpanded ? "閉じる" : "詳細設定")
+                        Text(isExpanded ? "閉じる" : "詳細")
                     }
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.04)))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.05)))
                 }
                 .buttonStyle(.plain)
             }
@@ -2131,30 +1455,32 @@ struct SettingsPopoverView: View {
                     builtInPeriodToggleRow(isOpenAI: true, csv: monitor.openaiEnabledPeriodsCSV)
 
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .twoHours) {
-                        limitInputRow(label: "2時間上限", value: $monitor.openaiTokenLimit2h)
+                        limitInputRow(label: "2時間上限 (tokens)", value: $monitor.openaiTokenLimit2h)
                     }
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .fiveHours) {
-                        limitInputRow(label: "5時間上限", value: $monitor.openaiTokenLimit5h)
+                        limitInputRow(label: "5時間上限 (tokens)", value: $monitor.openaiTokenLimit5h)
                     }
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .daily) {
-                        limitInputRow(label: "1日上限", value: $monitor.openaiTokenLimitDaily)
+                        limitInputRow(label: "1日上限 (tokens)", value: $monitor.openaiTokenLimitDaily)
                     }
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .weekly) {
-                        limitInputRow(label: "週次上限", value: $monitor.openaiTokenLimitWeekly)
+                        limitInputRow(label: "週次上限 (tokens)", value: $monitor.openaiTokenLimitWeekly)
                     }
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .monthly) {
-                        limitInputRow(label: "月次上限", value: $monitor.openaiTokenLimit)
+                        limitInputRow(label: "月次上限 (tokens)", value: $monitor.openaiTokenLimit)
                     }
+
+                    inlinePathEditor(for: "openai")
 
                     HStack(spacing: 6) {
                         if revealAdminKey {
-                            TextField("OpenAI Admin Key (組織API集計用・任意)", text: $monitor.openaiAdminKey)
+                            TextField("OpenAI Admin Key (組織API同期用・任意)", text: $monitor.openaiAdminKey)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 11.5))
+                                .font(.system(size: 11))
                         } else {
-                            SecureField("OpenAI Admin Key (組織API集計用・任意)", text: $monitor.openaiAdminKey)
+                            SecureField("OpenAI Admin Key (組織API同期用・任意)", text: $monitor.openaiAdminKey)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 11.5))
+                                .font(.system(size: 11))
                         }
                         Button {
                             revealAdminKey.toggle()
@@ -2165,10 +1491,10 @@ struct SettingsPopoverView: View {
                         .buttonStyle(.borderless)
                     }
                 }
-                .padding(.top, 4)
+                .padding(.top, 2)
             }
         }
-        .padding(10)
+        .padding(9)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
     }
 
@@ -2176,34 +1502,39 @@ struct SettingsPopoverView: View {
     @ViewBuilder
     private var geminiServiceCard: some View {
         let isExpanded = isExpanded("gemini")
+        let hasCustomPath = monitor.customProviderPaths["gemini"] != nil
+        let isDetected = monitor.geminiUsedTokens > 0
+
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Toggle("", isOn: $monitor.showGeminiSection)
                     .labelsHidden()
+                    .toggleStyle(.checkbox)
                     .controlSize(.regular)
 
                 Image(systemName: "sparkle")
                     .font(.system(size: 14))
-                    .foregroundStyle(.tint)
-                    .frame(width: 20)
+                    .foregroundStyle(monitor.showGeminiSection ? .primary : .secondary)
+                    .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text("Google Gemini")
-                            .font(.system(size: 13.5, weight: .bold))
-                        Text(monitor.geminiUsedTokens > 0 ? "実ログ検出" : "スタンバイ")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .foregroundStyle(monitor.geminiUsedTokens > 0 ? Color.green : Color.secondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1.5)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(monitor.geminiUsedTokens > 0 ? Color.green.opacity(0.12) : Color.primary.opacity(0.06)))
+                            .font(.system(size: 13, weight: .bold))
+                        statusBadge(hasCustomPath: hasCustomPath, isDetected: isDetected)
                     }
-                    Text("月間計: \(formatCompactTokenCount(monitor.geminiUsedTokens)) tokens · $\(String(format: "%.2f", monitor.geminiCostUSD))")
+                    let costPart = monitor.geminiCostUSD > 0 ? String(format: " · API換算 $%.2f", monitor.geminiCostUSD) : ""
+                    Text("月間: \(formatCompactTokenCount(monitor.geminiUsedTokens)) tokens\(costPart)")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
+
+                Toggle("メニューバー", isOn: $monitor.showGeminiInMenuBar)
+                    .font(.system(size: 10.5))
+                    .controlSize(.mini)
+                    .disabled(!monitor.showGeminiSection)
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -2212,13 +1543,13 @@ struct SettingsPopoverView: View {
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        Text(isExpanded ? "閉じる" : "詳細設定")
+                        Text(isExpanded ? "閉じる" : "詳細")
                     }
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.04)))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.05)))
                 }
                 .buttonStyle(.plain)
             }
@@ -2229,29 +1560,31 @@ struct SettingsPopoverView: View {
                     builtInPeriodToggleRow(isOpenAI: false, csv: monitor.geminiEnabledPeriodsCSV)
 
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .twoHours) {
-                        limitInputRow(label: "2時間上限", value: $monitor.geminiTokenLimit2h)
+                        limitInputRow(label: "2時間上限 (tokens)", value: $monitor.geminiTokenLimit2h)
                     }
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .fiveHours) {
-                        limitInputRow(label: "5時間上限", value: $monitor.geminiTokenLimit5h)
+                        limitInputRow(label: "5時間上限 (tokens)", value: $monitor.geminiTokenLimit5h)
                     }
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .daily) {
-                        limitInputRow(label: "1日上限", value: $monitor.geminiTokenLimitDaily)
+                        limitInputRow(label: "1日上限 (tokens)", value: $monitor.geminiTokenLimitDaily)
                     }
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .weekly) {
-                        limitInputRow(label: "週次上限", value: $monitor.geminiTokenLimitWeekly)
+                        limitInputRow(label: "週次上限 (tokens)", value: $monitor.geminiTokenLimitWeekly)
                     }
                     if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .monthly) {
-                        limitInputRow(label: "月次上限", value: $monitor.geminiTokenLimit)
+                        limitInputRow(label: "月次上限 (tokens)", value: $monitor.geminiTokenLimit)
                     }
+
+                    inlinePathEditor(for: "gemini")
 
                     TextField("GCP Project ID (Cloud Monitoring同期用・任意)", text: $monitor.gcpProjectId)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11.5))
+                        .font(.system(size: 11))
                 }
-                .padding(.top, 4)
+                .padding(.top, 2)
             }
         }
-        .padding(10)
+        .padding(9)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
     }
 
@@ -2260,37 +1593,39 @@ struct SettingsPopoverView: View {
     private func customSubscriptionCard(sub: Binding<CustomSubscriptionConfig>) -> some View {
         let currentSub = sub.wrappedValue
         let isExpanded = isExpanded(currentSub.id)
-        let live = monitor.customProviderLiveUsage[currentSub.id]
+        let baseKey = currentSub.id.split(separator: "_").first.map(String.init) ?? currentSub.id
+        let live = monitor.customProviderLiveUsage[currentSub.id] ?? monitor.customProviderLiveUsage[baseKey]
         let unit = providerUnit(for: currentSub.id)
+        let hasCustomPath = monitor.customProviderPaths[currentSub.id] != nil
+        let monthlyCount = live?.usedByPeriod?.monthly ?? currentSub.manualUsedMonthly
+        let isDetected = monitor.detectedProviderIds.contains(baseKey) || monthlyCount > 0
+        let effCost = monitor.effectiveCostUSD(for: currentSub)
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Toggle("", isOn: sub.isEnabled)
                     .labelsHidden()
+                    .toggleStyle(.checkbox)
                     .controlSize(.regular)
 
                 Image(systemName: currentSub.iconName)
                     .font(.system(size: 14))
-                    .foregroundStyle(.tint)
-                    .frame(width: 20)
+                    .foregroundStyle(currentSub.isEnabled ? .primary : .secondary)
+                    .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(currentSub.name)
-                            .font(.system(size: 13.5, weight: .bold))
-
-                        if let status = live?.status ?? (currentSub.statusNote.isEmpty ? nil : currentSub.statusNote) {
-                            Text(status)
-                                .font(.system(size: 9.5, weight: .semibold))
-                                .foregroundStyle(.blue)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1.5)
-                                .background(RoundedRectangle(cornerRadius: 4).fill(Color.blue.opacity(0.12)))
-                        }
+                            .font(.system(size: 13, weight: .bold))
+                        statusBadge(
+                            hasCustomPath: hasCustomPath,
+                            isDetected: isDetected,
+                            customLabel: live?.status ?? (currentSub.statusNote.isEmpty ? nil : currentSub.statusNote)
+                        )
                     }
 
-                    let monthlyCount = live?.usedByPeriod?.monthly ?? currentSub.manualUsedMonthly
-                    Text("月間計: \(formatCompactUsage(monthlyCount, unit: unit)) \(unit) · $\(String(format: "%.2f", monitor.effectiveCostUSD(for: currentSub)))")
+                    let costPart = effCost > 0 ? String(format: " · $%.2f", effCost) : ""
+                    Text("月間: \(formatCompactUsage(monthlyCount, unit: unit)) \(unit)\(costPart)")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -2298,8 +1633,9 @@ struct SettingsPopoverView: View {
                 Spacer()
 
                 Toggle("メニューバー", isOn: sub.showInMenuBar)
-                    .font(.system(size: 11))
-                    .controlSize(.small)
+                    .font(.system(size: 10.5))
+                    .controlSize(.mini)
+                    .disabled(!currentSub.isEnabled)
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -2314,7 +1650,7 @@ struct SettingsPopoverView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.04)))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.05)))
                 }
                 .buttonStyle(.plain)
 
@@ -2324,7 +1660,7 @@ struct SettingsPopoverView: View {
                     Image(systemName: "trash")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .padding(4)
+                        .padding(3)
                 }
                 .buttonStyle(.plain)
                 .help("サービスを削除")
@@ -2334,32 +1670,19 @@ struct SettingsPopoverView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Divider()
 
-                    HStack(spacing: 8) {
-                        TextField("サービス名", text: sub.name)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12))
-                        TextField("略称", text: sub.shortName)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12))
-                            .frame(width: 60)
-                        TextField("月額 ($)", value: sub.usedCostUSD, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12))
-                            .frame(width: 80)
-                    }
-
                     HStack(spacing: 6) {
                         Text("表示枠")
-                            .font(.system(size: 11.5))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                         Spacer()
                         ForEach(LimitPeriod.allCases) { period in
                             let isOn = currentSub.isPeriodEnabled(period)
                             Button {
                                 sub.wrappedValue.setPeriod(period, enabled: !isOn)
+                                monitor.isDetailedView = true
                             } label: {
                                 Text(period.label)
-                                    .font(.system(size: 11.5, weight: isOn ? .semibold : .regular))
+                                    .font(.system(size: 11, weight: isOn ? .semibold : .regular))
                                     .foregroundStyle(isOn ? .primary : .secondary)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 3)
@@ -2374,33 +1697,128 @@ struct SettingsPopoverView: View {
                     }
 
                     if currentSub.isPeriodEnabled(.twoHours) {
-                        periodPairRow(label: "2時間 (使用 / 上限)", used: sub.manualUsed2h, limit: sub.limit2h)
+                        limitInputRow(label: "2時間上限 (\(unit))", value: sub.limit2h)
                     }
                     if currentSub.isPeriodEnabled(.fiveHours) {
-                        periodPairRow(label: "5時間 (使用 / 上限)", used: sub.manualUsed5h, limit: sub.limit5h)
+                        limitInputRow(label: "5時間上限 (\(unit))", value: sub.limit5h)
                     }
                     if currentSub.isPeriodEnabled(.daily) {
-                        periodPairRow(label: "1日 (使用 / 上限)", used: sub.manualUsedDaily, limit: sub.limitDaily)
+                        limitInputRow(label: "1日上限 (\(unit))", value: sub.limitDaily)
                     }
                     if currentSub.isPeriodEnabled(.weekly) {
-                        periodPairRow(label: "週次 (使用 / 上限)", used: sub.manualUsedWeekly, limit: sub.limitWeekly)
+                        limitInputRow(label: "週次上限 (\(unit))", value: sub.limitWeekly)
                     }
                     if currentSub.isPeriodEnabled(.monthly) {
-                        periodPairRow(label: "月次 (使用 / 上限)", used: sub.manualUsedMonthly, limit: sub.limitMonthly)
+                        limitInputRow(label: "月次上限 (\(unit))", value: sub.limitMonthly)
+                    }
+
+                    inlinePathEditor(for: currentSub.id)
+
+                    HStack(spacing: 6) {
+                        Text("名称/略称")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        TextField("サービス名", text: sub.name)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 11))
+                            .frame(width: 130)
+                        TextField("略称", text: sub.shortName)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 11))
+                            .frame(width: 55)
                     }
                 }
-                .padding(.top, 4)
+                .padding(.top, 2)
             }
         }
-        .padding(10)
+        .padding(9)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
+    }
+
+    // MARK: - Inline Log Path Editor
+    @ViewBuilder
+    private func inlinePathEditor(for serviceId: String) -> some View {
+        let hint = defaultLogPathHint(for: serviceId)
+        let currentSaved = monitor.customProviderPaths[serviceId]
+        let inputBinding = Binding<String>(
+            get: { pathInputs[serviceId] ?? currentSaved ?? "" },
+            set: { pathInputs[serviceId] = $0 }
+        )
+
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text("ログパス")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
+                TextField(hint, text: inputBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+
+                Button("参照...") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = true
+                    panel.canChooseDirectories = true
+                    panel.allowsMultipleSelection = false
+                    panel.prompt = "選択"
+                    panel.message = "\(serviceId) のログファイルまたはフォルダを選択してください"
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    if panel.runModal() == .OK, let url = panel.url {
+                        pathInputs[serviceId] = url.path
+                        applyCustomPath(for: serviceId, path: url.path)
+                    }
+                }
+                .controlSize(.mini)
+
+                Button("適用") {
+                    applyCustomPath(for: serviceId, path: inputBinding.wrappedValue)
+                }
+                .controlSize(.mini)
+
+                if currentSaved != nil {
+                    Button("リセット") {
+                        monitor.setCustomPath(for: serviceId, path: "")
+                        pathInputs[serviceId] = ""
+                        pathValidationResults.removeValue(forKey: serviceId)
+                        Task { await monitor.refresh() }
+                    }
+                    .controlSize(.mini)
+                }
+            }
+
+            if let result = pathValidationResults[serviceId] {
+                HStack(spacing: 4) {
+                    Image(systemName: result.isValid ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    Text(result.message)
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(result.isValid ? .green : .orange)
+            }
+        }
+    }
+
+    private func applyCustomPath(for serviceId: String, path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            monitor.setCustomPath(for: serviceId, path: "")
+            pathValidationResults.removeValue(forKey: serviceId)
+            Task { await monitor.refresh() }
+            return
+        }
+        let res = LocalUsageCollector.validateAndScan(providerId: serviceId, path: trimmed)
+        pathValidationResults[serviceId] = res
+        if res.isValid {
+            monitor.setCustomPath(for: serviceId, path: trimmed)
+            Task { await monitor.refresh() }
+        }
     }
 
     @ViewBuilder
     private func builtInPeriodToggleRow(isOpenAI: Bool, csv: String) -> some View {
         HStack(spacing: 6) {
             Text("表示枠")
-                .font(.system(size: 11.5))
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
             ForEach(LimitPeriod.allCases) { period in
@@ -2409,7 +1827,7 @@ struct SettingsPopoverView: View {
                     monitor.setBuiltInPeriod(isOpenAI: isOpenAI, period: period, enabled: !isOn)
                 } label: {
                     Text(period.label)
-                        .font(.system(size: 11.5, weight: isOn ? .semibold : .regular))
+                        .font(.system(size: 11, weight: isOn ? .semibold : .regular))
                         .foregroundStyle(isOn ? .primary : .secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
@@ -2425,36 +1843,16 @@ struct SettingsPopoverView: View {
     }
 
     @ViewBuilder
-    private func periodPairRow(label: String, used: Binding<Int>, limit: Binding<Int>) -> some View {
-        HStack(spacing: 6) {
-            Text(label)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-            Spacer()
-            TextField("使用", value: used, format: .number)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11.5))
-                .frame(width: 80)
-            Text("/")
-                .foregroundStyle(.secondary)
-            TextField("上限", value: limit, format: .number)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11.5))
-                .frame(width: 80)
-        }
-    }
-
-    @ViewBuilder
     private func limitInputRow(label: String, value: Binding<Int>) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 11.5))
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
-            TextField("Tokens", value: value, format: .number)
+            TextField("上限", value: value, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11.5))
-                .frame(width: 120)
+                .font(.system(size: 11))
+                .frame(width: 110)
         }
     }
 }
@@ -2466,23 +1864,25 @@ final class FirstMouseHostingHelperView: NSView {
     }
 }
 
-func closeDesktopWidgetWindow() {
+func closeDesktopWidgetWindow(monitor: UsageMonitor? = nil) {
     DispatchQueue.main.async {
         for window in NSApp.windows where window.identifier?.rawValue.contains("desktop-widget") == true || window.title == "AI Meter Widget" {
             window.close()
         }
+        monitor?.isDesktopWidgetOpen = false
     }
 }
 
-func miniaturizeDesktopWidgetWindow() {
+func miniaturizeDesktopWidgetWindow(monitor: UsageMonitor? = nil) {
     DispatchQueue.main.async {
         for window in NSApp.windows where window.identifier?.rawValue.contains("desktop-widget") == true || window.title == "AI Meter Widget" {
             window.miniaturize(nil)
         }
+        monitor?.isDesktopWidgetOpen = false
     }
 }
 
-func openOrRestoreDesktopWidgetWindow(openWindow: @escaping (String) -> Void) {
+func openOrRestoreDesktopWidgetWindow(monitor: UsageMonitor? = nil, openWindow: @escaping (String) -> Void) {
     DispatchQueue.main.async {
         var found = false
         for window in NSApp.windows where window.identifier?.rawValue.contains("desktop-widget") == true || window.title == "AI Meter Widget" {
@@ -2496,6 +1896,7 @@ func openOrRestoreDesktopWidgetWindow(openWindow: @escaping (String) -> Void) {
         if !found {
             openWindow("desktop-widget")
         }
+        monitor?.isDesktopWidgetOpen = true
     }
 }
 
@@ -2550,12 +1951,14 @@ struct MacWindowTrafficLights: View {
 struct DesktopWidgetWindowAccessor: NSViewRepresentable {
     var allowBackgroundDrag: Bool = true
     var isPinned: Bool = true
+    var onVisibilityChange: ((Bool) -> Void)? = nil
 
     func makeNSView(context: Context) -> NSView {
         let view = FirstMouseHostingHelperView()
         DispatchQueue.main.async {
             if let window = view.window {
                 Self.configure(window: window, allowBackgroundDrag: allowBackgroundDrag, isPinned: isPinned)
+                onVisibilityChange?(window.isVisible && !window.isMiniaturized)
             }
         }
         return view
@@ -2565,12 +1968,12 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
         DispatchQueue.main.async {
             if let window = nsView.window {
                 Self.configure(window: window, allowBackgroundDrag: allowBackgroundDrag, isPinned: isPinned)
+                onVisibilityChange?(window.isVisible && !window.isMiniaturized)
             }
         }
     }
 
     static func configure(window: NSWindow, allowBackgroundDrag: Bool, isPinned: Bool) {
-        // macOS標準アプリのように閉じたり最小化できるようスタイルマスクを有効化
         window.styleMask.insert([.titled, .closable, .miniaturizable])
         window.level = isPinned ? .floating : .normal
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -2596,14 +1999,8 @@ struct AIMeterCardView: View {
     @ObservedObject var monitor: UsageMonitor
     var isMenuBar: Bool = false
     @State private var showSettings: Bool = false
-    @State private var showSetupWizard: Bool = false
     @State private var showHelp: Bool = false
-    @State private var filterSelection: String = "all"
     @Environment(\.openWindow) private var openWindow
-
-    private var isDisplayingWizard: Bool {
-        showSetupWizard || !monitor.hasCompletedSetupWizard
-    }
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -2611,41 +2008,16 @@ struct AIMeterCardView: View {
         return f
     }()
 
-    private var selectedPeriodFilter: LimitPeriod? {
-        LimitPeriod(rawValue: filterSelection)
-    }
-
     private var highlightedMenuBarPeriod: LimitPeriod? {
         LimitPeriod(rawValue: monitor.menuBarPeriodMode)
     }
 
-    private var enabledCustomSubscriptions: [CustomSubscriptionConfig] {
+    private var visibleCustomSubscriptions: [CustomSubscriptionConfig] {
         monitor.customSubscriptions.filter(\.isEnabled)
     }
 
-    private func hasMatchingPeriod(metrics: [PeriodUsageMetric]) -> Bool {
-        if let filter = selectedPeriodFilter {
-            return metrics.contains { $0.period == filter }
-        }
-        return true
-    }
-
-    private var isShowOpenAI: Bool {
-        monitor.showOpenAISection && hasMatchingPeriod(metrics: monitor.openaiMetrics)
-    }
-
-    private var isShowGemini: Bool {
-        monitor.showGeminiSection && hasMatchingPeriod(metrics: monitor.geminiMetrics)
-    }
-
-    private var visibleCustomSubscriptions: [CustomSubscriptionConfig] {
-        enabledCustomSubscriptions.filter { sub in
-            hasMatchingPeriod(metrics: monitor.metrics(for: sub))
-        }
-    }
-
     private var totalVisibleProvidersCount: Int {
-        (isShowOpenAI ? 1 : 0) + (isShowGemini ? 1 : 0) + visibleCustomSubscriptions.count
+        (monitor.showOpenAISection ? 1 : 0) + (monitor.showGeminiSection ? 1 : 0) + visibleCustomSubscriptions.count
     }
 
     var body: some View {
@@ -2656,30 +2028,9 @@ struct AIMeterCardView: View {
                         showHelp = false
                     }
                 }
-            } else if isDisplayingWizard {
-                SetupWizardView(
-                    monitor: monitor,
-                    onOpenHelp: {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            showHelp = true
-                        }
-                    },
-                    onComplete: {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            monitor.hasCompletedSetupWizard = true
-                            showSetupWizard = false
-                        }
-                    }
-                )
             } else if showSettings {
                 SettingsPopoverView(
                     monitor: monitor,
-                    onOpenSetupWizard: {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            showSettings = false
-                            showSetupWizard = true
-                        }
-                    },
                     onOpenHelp: {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             showSettings = false
@@ -2695,14 +2046,13 @@ struct AIMeterCardView: View {
             } else {
                 // Header
                 HStack(spacing: 6) {
-                    // ウィジェット専用: macOS標準スタイルのトラフィックライト（閉じる・最小化）
                     if !isMenuBar {
                         MacWindowTrafficLights(
                             onClose: {
-                                closeDesktopWidgetWindow()
+                                closeDesktopWidgetWindow(monitor: monitor)
                             },
                             onMiniaturize: {
-                                miniaturizeDesktopWidgetWindow()
+                                miniaturizeDesktopWidgetWindow(monitor: monitor)
                             }
                         )
                         .padding(.trailing, 2)
@@ -2714,43 +2064,55 @@ struct AIMeterCardView: View {
 
                     Spacer()
 
-                    // 詳細/サマリ切り替えボタン
+                    // 要点 / 全枠 切り替えボタン
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             monitor.isDetailedView.toggle()
                         }
                     } label: {
-                        Image(systemName: monitor.isDetailedView ? "list.bullet.indent" : "rectangle.split.1x2")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(monitor.isDetailedView ? Color.accentColor : Color.secondary)
-                            .frame(width: 24, height: 22)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(monitor.isDetailedView ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.06))
-                            )
-                            .contentShape(Rectangle())
+                        HStack(spacing: 3) {
+                            Image(systemName: monitor.isDetailedView ? "list.bullet" : "sparkles.rectangle.stack")
+                            Text(monitor.isDetailedView ? "全枠" : "要点")
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(monitor.isDetailedView ? Color.accentColor : Color.secondary)
+                        .padding(.horizontal, 7)
+                        .frame(height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(monitor.isDetailedView ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.06))
+                        )
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(monitor.isDetailedView ? "サマリ表示に切り替え" : "全期間の詳細を表示")
+                    .help(monitor.isDetailedView ? "全枠表示中（クリックで最逼迫＋月次の要点表示に短縮）" : "要点表示中（クリックで設定した全枠を表示）")
 
-                    // 更新ボタン
+                    // 更新ボタン (更新中はスピナー表示)
                     Button {
                         Task {
                             await monitor.refresh()
                         }
                     } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 24, height: 22)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(Color.primary.opacity(0.06))
-                            )
-                            .contentShape(Rectangle())
+                        Group {
+                            if monitor.isRefreshing {
+                                ProgressView()
+                                    .controlSize(.mini)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(width: 24, height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(Color.primary.opacity(0.06))
+                        )
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("更新")
+                    .disabled(monitor.isRefreshing)
+                    .help("今すぐ更新")
                     .accessibilityLabel("今すぐ更新")
 
                     // ウィジェット専用: 最前面ピン留めトグル
@@ -2771,32 +2133,11 @@ struct AIMeterCardView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help(monitor.isWidgetPinned ? "最前面固定中 (クリックで通常ウィンドウへ)" : "通常ウィンドウ (クリックで最前面固定へ)")
+                        .help(monitor.isWidgetPinned ? "最前面固定中 (クリックで解除)" : "通常ウィンドウ (クリックで最前面固定)")
                     }
-
-                    // ヘルプボタン
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            showHelp = true
-                        }
-                    } label: {
-                        Image(systemName: "questionmark.circle")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 24, height: 22)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(Color.primary.opacity(0.06))
-                            )
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("ヘルプ & Q&A")
-                    .accessibilityLabel("ヘルプを開く")
 
                     // 設定ボタン
                     Button {
-                        NSApplication.shared.activate(ignoringOtherApps: true)
                         withAnimation(.easeInOut(duration: 0.15)) {
                             showSettings = true
                         }
@@ -2816,38 +2157,33 @@ struct AIMeterCardView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("設定・サブスク管理")
+                    .help("サービス・パス・上限の設定")
                     .accessibilityLabel("設定を開く")
                 }
 
-                // Period Filter Bar
-                Picker("", selection: $filterSelection) {
-                    Text("すべて").tag("all")
-                    ForEach(LimitPeriod.allCases) { period in
-                        Text(period.label).tag(period.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-
                 // Provider Sections
                 if totalVisibleProvidersCount == 0 {
-                    VStack(spacing: 6) {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
+                    VStack(spacing: 8) {
+                        Image(systemName: "slider.horizontal.3")
                             .font(.system(size: 18))
                             .foregroundStyle(.tertiary)
-                        Text("\(selectedPeriodFilter?.label ?? "")枠が設定されているサービスはありません")
-                            .font(.system(size: 11.5))
+                        Text("表示するAIサービスが選択されていません")
+                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
+                        Button("設定からサービスを有効化") {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showSettings = true
+                            }
+                        }
+                        .controlSize(.small)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 20)
-                } else if totalVisibleProvidersCount > 2 {
+                } else if totalVisibleProvidersCount > 3 {
                     ScrollView {
                         providerSectionsStack
                     }
-                    .frame(maxHeight: 340)
+                    .frame(maxHeight: 360)
                 } else {
                     providerSectionsStack
                 }
@@ -2858,23 +2194,26 @@ struct AIMeterCardView: View {
                         .font(.system(size: 10.5).monospacedDigit())
                         .foregroundStyle(.tertiary)
                     Spacer()
-                    Text(String(format: "月間計 $%.2f", monitor.totalCostUSD))
-                        .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    if monitor.totalCostUSD > 0 {
+                        Text(String(format: "API換算 $%.2f", monitor.totalCostUSD))
+                            .font(.system(size: 11, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Mac内ログ自動集計")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 .padding(.top, 1)
 
                 if isMenuBar {
                     Divider()
-                    HStack {
-                        let isWidgetOpen = NSApp.windows.contains { w in
-                            (w.identifier?.rawValue.contains("desktop-widget") == true || w.title == "AI Meter Widget") && w.isVisible && !w.isMiniaturized
-                        }
-                        Button(isWidgetOpen ? "ウィジェットを閉じる" : "ウィジェットを表示") {
-                            if isWidgetOpen {
-                                closeDesktopWidgetWindow()
+                    HStack(spacing: 8) {
+                        Button(monitor.isDesktopWidgetOpen ? "ウィジェットを閉じる" : "ウィジェットを表示") {
+                            if monitor.isDesktopWidgetOpen {
+                                closeDesktopWidgetWindow(monitor: monitor)
                             } else {
-                                openOrRestoreDesktopWidgetWindow { id in
+                                openOrRestoreDesktopWidgetWindow(monitor: monitor) { id in
                                     openWindow(id: id)
                                 }
                             }
@@ -2882,6 +2221,16 @@ struct AIMeterCardView: View {
                         .controlSize(.small)
 
                         Spacer()
+
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showHelp = true
+                            }
+                        } label: {
+                            Image(systemName: "questionmark.circle")
+                        }
+                        .controlSize(.small)
+                        .help("ヘルプ & Q&A")
 
                         Button("終了") {
                             NSApplication.shared.terminate(nil)
@@ -2892,7 +2241,7 @@ struct AIMeterCardView: View {
             }
         }
         .padding(12)
-        .frame(width: showHelp ? 480 : ((isDisplayingWizard && !showHelp) ? 550 : (showSettings ? 420 : 310)))
+        .frame(width: (showSettings || showHelp) ? 380 : 320)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.regularMaterial)
@@ -2905,18 +2254,59 @@ struct AIMeterCardView: View {
             Group {
                 if !isMenuBar {
                     DesktopWidgetWindowAccessor(
-                        allowBackgroundDrag: !showSettings && !isDisplayingWizard && !showHelp,
-                        isPinned: monitor.isWidgetPinned
+                        allowBackgroundDrag: !showSettings && !showHelp,
+                        isPinned: monitor.isWidgetPinned,
+                        onVisibilityChange: { visible in
+                            if monitor.isDesktopWidgetOpen != visible {
+                                monitor.isDesktopWidgetOpen = visible
+                            }
+                        }
                     )
                 }
             }
         )
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { note in
+            if let win = note.object as? NSWindow,
+               win.identifier?.rawValue.contains("desktop-widget") == true || win.title == "AI Meter Widget" {
+                monitor.isDesktopWidgetOpen = false
+            }
+        }
+        .onAppear {
+            if isMenuBar && monitor.autoShowWidgetOnLaunch && !monitor.hasAutoOpenedWidgetOnLaunch {
+                monitor.hasAutoOpenedWidgetOnLaunch = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    openOrRestoreDesktopWidgetWindow(monitor: monitor) { id in
+                        openWindow(id: id)
+                    }
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showDesktopWidgetRequest)) { _ in
+            openOrRestoreDesktopWidgetWindow(monitor: monitor) { id in
+                openWindow(id: id)
+            }
+        }
+        .onOpenURL { _ in
+            openOrRestoreDesktopWidgetWindow(monitor: monitor) { id in
+                openWindow(id: id)
+            }
+        }
         .background(
             Group {
-                if !isMenuBar {
-                    // ⌘W / ESC: ウィジェットを閉じる
+                if showHelp || showSettings {
+                    // 設定・ヘルプ表示中の ESC はメイン画面へ戻る
                     Button("") {
-                        closeDesktopWidgetWindow()
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            showHelp = false
+                            showSettings = false
+                        }
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    .opacity(0)
+                } else if !isMenuBar {
+                    // メイン画面での ⌘W / ESC: ウィジェットを閉じる
+                    Button("") {
+                        closeDesktopWidgetWindow(monitor: monitor)
                     }
                     .keyboardShortcut("w", modifiers: .command)
                     .keyboardShortcut(.cancelAction)
@@ -2924,7 +2314,7 @@ struct AIMeterCardView: View {
 
                     // ⌘M: ウィジェットを最小化
                     Button("") {
-                        miniaturizeDesktopWidgetWindow()
+                        miniaturizeDesktopWidgetWindow(monitor: monitor)
                     }
                     .keyboardShortcut("m", modifiers: .command)
                     .opacity(0)
@@ -2936,28 +2326,26 @@ struct AIMeterCardView: View {
     @ViewBuilder
     private var providerSectionsStack: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if isShowOpenAI {
+            if monitor.showOpenAISection {
                 ProviderUsageSection(
                     title: "OpenAI",
                     subtitle: monitor.openaiStatus,
                     usedCostUSD: monitor.openaiCostUSD,
                     budgetUSD: monitor.openaiBudgetUSD,
                     metrics: monitor.openaiMetrics,
-                    selectedFilter: selectedPeriodFilter,
                     highlightedPeriod: highlightedMenuBarPeriod,
                     unit: "tokens",
                     isDetailed: monitor.isDetailedView
                 )
             }
 
-            if isShowGemini {
+            if monitor.showGeminiSection {
                 ProviderUsageSection(
                     title: "Gemini",
                     subtitle: monitor.geminiStatus,
                     usedCostUSD: monitor.geminiCostUSD,
                     budgetUSD: monitor.geminiBudgetUSD,
                     metrics: monitor.geminiMetrics,
-                    selectedFilter: selectedPeriodFilter,
                     highlightedPeriod: highlightedMenuBarPeriod,
                     unit: "tokens",
                     isDetailed: monitor.isDetailedView
@@ -2965,13 +2353,14 @@ struct AIMeterCardView: View {
             }
 
             ForEach(visibleCustomSubscriptions) { sub in
+                let baseKey = sub.id.split(separator: "_").first.map(String.init) ?? sub.id
+                let liveStatus = monitor.customProviderLiveUsage[sub.id]?.status ?? monitor.customProviderLiveUsage[baseKey]?.status
                 ProviderUsageSection(
                     title: sub.name,
-                    subtitle: monitor.customProviderLiveUsage[sub.id]?.status ?? sub.statusNote,
+                    subtitle: liveStatus ?? sub.statusNote,
                     usedCostUSD: monitor.effectiveCostUSD(for: sub),
                     budgetUSD: sub.budgetUSD,
                     metrics: monitor.metrics(for: sub),
-                    selectedFilter: selectedPeriodFilter,
                     highlightedPeriod: highlightedMenuBarPeriod,
                     unit: providerUnit(for: sub.id),
                     isDetailed: monitor.isDetailedView
@@ -2981,10 +2370,27 @@ struct AIMeterCardView: View {
     }
 }
 
+// MARK: - App Delegate
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.setActivationPolicy(.accessory)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NotificationCenter.default.post(name: .showDesktopWidgetRequest, object: nil)
+        return true
+    }
+}
+
 // MARK: - App Entrypoint
 @main
 struct AIMeterApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var monitor = UsageMonitor()
+
+    init() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
 
     var body: some Scene {
         Window("AI Meter Widget", id: "desktop-widget") {
@@ -2996,8 +2402,11 @@ struct AIMeterApp: App {
         MenuBarExtra {
             AIMeterCardView(monitor: monitor, isMenuBar: true)
         } label: {
-            Text(monitor.menuBarTitle)
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+            HStack(spacing: 3) {
+                Image(systemName: "gauge.with.needle.fill")
+                Text(monitor.menuBarTitle)
+            }
+            .font(.system(size: 13, weight: .semibold).monospacedDigit())
         }
         .menuBarExtraStyle(.window)
     }
