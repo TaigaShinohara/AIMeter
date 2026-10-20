@@ -303,7 +303,14 @@ def publish(output, validation_notes):
     run("gh", "release", "create", tag, str(output / metadata["archive"]),
         str(output / "SHA256SUMS"), "--repo", GITHUB_REPO, "--target", commit,
         "--title", "AIMeter " + metadata["version"], "--notes-file", notes, "--draft")
-    remote = json.loads(run("gh", "api", f"repos/{GITHUB_REPO}/releases/tags/{tag}"))
+    # Drafts may not have a Git tag yet; the REST by-tag endpoint returns 404.
+    # gh release view resolves drafts too, without creating or moving a tag.
+    view = ("gh", "release", "view", tag, "--repo", GITHUB_REPO,
+            "--json", "assets,isDraft,url,tagName,targetCommitish")
+    remote = json.loads(run(*view))
+    if (not remote["isDraft"] or remote["tagName"] != tag
+            or remote["targetCommitish"] != commit):
+        raise ValueError("Unexpected draft release or source commit; inspect before publishing.")
     expected = {metadata["archive"]: metadata["sha256"],
                 "SHA256SUMS": sha256(output / "SHA256SUMS")}
     assets = {asset["name"]: asset for asset in remote["assets"]}
@@ -311,10 +318,10 @@ def publish(output, validation_notes):
         if assets.get(name, {}).get("digest") != "sha256:" + digest:
             raise ValueError("Uploaded asset digest not confirmed; release remains a draft.")
     run("gh", "release", "edit", tag, "--repo", GITHUB_REPO, "--draft=false")
-    verified = json.loads(run("gh", "api", f"repos/{GITHUB_REPO}/releases/tags/{tag}"))
-    if verified["draft"]:
+    verified = json.loads(run(*view))
+    if verified["isDraft"]:
         raise ValueError("Release is still a draft.")
-    print(verified["html_url"])
+    print(verified["url"])
 
 
 def main():

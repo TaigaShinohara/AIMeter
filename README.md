@@ -13,10 +13,13 @@ Codex、Gemini / Antigravity、Claude Code、Grok Bot、GitHub Copilot、Windsur
 
 Apple Silicon環境でビルドと合成データによるテストを確認しています。
 一般ユーザー向けの配布先は [GitHub Releases](https://github.com/TaigaShinohara/AIMeter/releases) です。
-現在は配布準備段階で、署名・公証済みバイナリの初回公開はまだ行っていません。
-公開後はReleaseに添付された `AIMeter-<version>-macos-universal.zip` を展開し、
+署名・Apple公証・公証チケット添付済みの
+[AIMeter 1.1.1](https://github.com/TaigaShinohara/AIMeter/releases/tag/v1.1.1) を公開しています。
+Releaseに添付された `AIMeter-<version>-macos-universal.zip` を展開し、
 `AIMeter.app` をアプリケーションフォルダへ移動して開きます。
-ソースコードのZIPはアプリ本体ではありません。
+Apple Silicon・Intelの両方を収録し、利用者によるXcodeやPythonのインストールは不要です。
+ソースコードのZIPはアプリ本体ではありません。初回起動・Widget実表示・Intel実機などの
+未確認範囲は、各Releaseの「動作確認の範囲」を確認してください。
 
 ## ビルドとテスト
 
