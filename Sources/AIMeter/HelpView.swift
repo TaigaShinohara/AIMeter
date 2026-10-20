@@ -94,20 +94,17 @@ struct HelpView: View {
                         Image(systemName: "chevron.left")
                         Text("戻る")
                     }
-                    .font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(GlassCapsuleButtonStyle())
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
                 Text("ヘルプ & よくある質問")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.headline)
 
                 Spacer()
 
                 Text("v1.2")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
             }
 

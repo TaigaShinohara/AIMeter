@@ -993,7 +993,7 @@ func gaugeWarningSymbol(for remainingRatio: Double) -> String? {
     }
 }
 
-// MARK: - Single Period Limit Row View (Clean Tabular Design)
+// MARK: - Single Period Limit Row View (macOS Native HIG Design)
 struct PeriodLimitRowView: View {
     let metric: PeriodUsageMetric
     let isHighlighted: Bool
@@ -1004,55 +1004,49 @@ struct PeriodLimitRowView: View {
         let pct = metric.remainingPercent
         let usageText = formatCompactUsage(metric.remainingTokens, unit: unit)
 
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             // 1. Period Label
             Text(metric.period.label)
-                .font(.system(size: 11.5, weight: isHighlighted ? .bold : .medium))
+                .font(.caption.weight(isHighlighted ? .bold : .medium))
                 .foregroundStyle(isHighlighted ? .primary : .secondary)
-                .frame(width: 36, alignment: .leading)
+                .frame(width: 38, alignment: .leading)
 
-            // 2. Clean Progress Bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.primary.opacity(0.08))
-                        .frame(height: 5)
-                    Capsule()
-                        .fill(gaugeColor(for: ratio))
-                        .frame(width: max(3, geo.size.width * ratio), height: 5)
-                        .animation(.easeInOut(duration: 0.2), value: ratio)
-                }
-                .frame(maxHeight: .infinity, alignment: .center)
-            }
-            .frame(height: 12)
+            // 2. Native macOS Progress Bar
+            ProgressView(value: min(max(ratio, 0.0), 1.0), total: 1.0)
+                .progressViewStyle(.linear)
+                .tint(gaugeColor(for: ratio))
+                .controlSize(.small)
 
             // 3. Remaining Amount with Unit
             HStack(spacing: 2) {
                 Text("残 \(usageText)")
                 if unit != "tokens" {
                     Text(unit)
-                        .font(.system(size: 9.5))
+                        .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
             }
-            .font(.system(size: 11).monospacedDigit())
+            .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
-            .frame(width: 74, alignment: .trailing)
+            .lineLimit(1)
+            .frame(width: 76, alignment: .trailing)
 
-            // 4. Remaining Percentage
+            // 4. Remaining Percentage (100%でも改行されない幅と設定)
             Text("\(pct)%")
-                .font(.system(size: 12, weight: .bold).monospacedDigit())
+                .font(.callout.weight(.semibold).monospacedDigit())
                 .foregroundStyle(percentageTextColor(for: ratio))
-                .frame(width: 36, alignment: .trailing)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: 48, alignment: .trailing)
         }
-        .padding(.vertical, 1.5)
+        .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(metric.period.label)制限")
         .accessibilityValue("残り \(usageText) \(unit) (\(pct)パーセント)")
     }
 }
 
-// MARK: - Provider Section View (Simple & Calm Layout)
+// MARK: - Provider Section View (macOS Native Control Center Style Tile)
 struct ProviderUsageSection: View {
     let title: String
     let subtitle: String
@@ -1097,41 +1091,49 @@ struct ProviderUsageSection: View {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                // Section Header
+                // Section Header (タイトル保護と右側情報のスマート配置)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(title)
-                        .font(.system(size: 12.5, weight: .bold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-
-                    if !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
+                    HStack(spacing: 5) {
+                        Text(title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
-                    }
 
-                    Spacer()
+                        if !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .layoutPriority(1)
+
+                    Spacer(minLength: 8)
 
                     if let resetInfo = activeResetString {
                         if usedCostUSD > 0 {
                             Text(String(format: "API換算 $%.2f · %@", usedCostUSD, resetInfo))
-                                .font(.system(size: 10.5).monospacedDigit())
+                                .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                         } else {
                             Text(resetInfo)
-                                .font(.system(size: 10.5).monospacedDigit())
+                                .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                         }
                     } else if usedCostUSD > 0 {
                         Text(String(format: "API換算 $%.2f", usedCostUSD))
-                            .font(.system(size: 10.5).monospacedDigit())
+                            .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
 
                 // Period Rows
-                VStack(spacing: 2) {
+                VStack(spacing: 3) {
                     ForEach(displayedMetrics) { metric in
                         PeriodLimitRowView(
                             metric: metric,
@@ -1142,719 +1144,15 @@ struct ProviderUsageSection: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 8)
             .background(
-                FrostedGlassCardBackground(cornerRadius: 9)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.6))
             )
-        }
-    }
-}
-
-// MARK: - Unified Settings View (Single Place for Services, Paths, and Limits)
-struct SettingsPopoverView: View {
-    @ObservedObject var monitor: UsageMonitor
-    @ObservedObject private var launchAtLogin = LaunchAtLoginManager.shared
-    var isMenuBar: Bool = false
-    var onOpenHelp: (() -> Void)? = nil
-    var onClose: (() -> Void)? = nil
-
-    @State private var revealAdminKey: Bool = false
-    @State private var expandedServiceIds: Set<String> = []
-    @State private var pathInputs: [String: String] = [:]
-    @State private var pathValidationResults: [String: LocalUsageCollector.ProviderPathScanResult] = [:]
-
-    private struct PresetOption: Identifiable {
-        let id: String
-        let label: String
-        let config: CustomSubscriptionConfig
-    }
-
-    private var presetOptions: [PresetOption] {
-        [
-            PresetOption(id: "claude", label: "Anthropic Claude", config: .claudePreset()),
-            PresetOption(id: "cursor", label: "Cursor", config: .cursorPreset()),
-            PresetOption(id: "windsurf", label: "Windsurf", config: .windsurfPreset()),
-            PresetOption(id: "copilot", label: "GitHub Copilot", config: .copilotPreset()),
-            PresetOption(id: "grokbot", label: "Grok / GrokBot", config: .grokbotPreset()),
-            PresetOption(id: "devin", label: "Devin", config: .devinPreset()),
-            PresetOption(id: "perplexity", label: "Perplexity Pro", config: .perplexityPreset()),
-            PresetOption(id: "deepseek", label: "DeepSeek", config: .deepseekPreset()),
-            PresetOption(id: "poe", label: "Poe", config: .poePreset()),
-            PresetOption(id: "trae", label: "Trae AI", config: .traePreset())
-        ]
-    }
-
-    private func isExpanded(_ id: String) -> Bool {
-        expandedServiceIds.contains(id)
-    }
-
-    private func toggleExpanded(_ id: String) {
-        if expandedServiceIds.contains(id) {
-            expandedServiceIds.remove(id)
-        } else {
-            expandedServiceIds.insert(id)
-        }
-        if pathInputs[id] == nil {
-            pathInputs[id] = monitor.customProviderPaths[id] ?? ""
-        }
-    }
-
-    private func isPresetAdded(_ id: String) -> Bool {
-        monitor.customSubscriptions.contains { $0.id == id || $0.id.hasPrefix("\(id)_") }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Top Bar
-            HStack(spacing: 8) {
-                if !isMenuBar {
-                    Color.clear
-                        .frame(width: 52, height: 16)
-                        .accessibilityHidden(true)
-                }
-
-                if let onClose {
-                    Button {
-                        onClose()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text("戻る")
-                        }
-                        .font(.system(size: 12.5, weight: .medium))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(GlassCapsuleButtonStyle())
-                }
-
-                Text("設定")
-                    .font(.system(size: 14.5, weight: .bold))
-
-                if let onOpenHelp {
-                    Button {
-                        onOpenHelp()
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "questionmark.circle")
-                            Text("ヘルプ")
-                        }
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3.5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(Color.primary.opacity(0.06))
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .help("仕組みやよくある質問を見る")
-                }
-
-                Spacer()
-
-                HStack(spacing: 4) {
-                    Text("メニューバー:")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Picker("", selection: $monitor.menuBarDisplayMode) {
-                        ForEach(MenuBarDisplayMode.allCases) { mode in
-                            Text(mode.label).tag(mode.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .frame(width: 128)
-                }
-            }
-
-            Divider()
-
-            // 起動・表示設定
-            HStack(spacing: 12) {
-                Toggle("ログイン時に自動起動", isOn: Binding(
-                    get: { launchAtLogin.isEnabled },
-                    set: { launchAtLogin.setEnabled($0) }
-                ))
-                .font(.system(size: 11))
-                .toggleStyle(.checkbox)
-                .help("Macの起動・ログイン時にAIMeterを自動的に起動します")
-
-                Spacer()
-
-                Toggle("起動時にウィジェット表示", isOn: $monitor.autoShowWidgetOnLaunch)
-                    .font(.system(size: 11))
-                    .toggleStyle(.checkbox)
-                    .help("アプリ起動時にデスクトップウィジェットを自動で表示します")
-            }
-            .padding(.horizontal, 2)
-            .padding(.vertical, 1)
-
-            Divider()
-
-            // Unified Services List
-            ScrollView {
-                VStack(spacing: 8) {
-                    // 1. OpenAI Service Card
-                    openAIServiceCard
-
-                    // 2. Gemini Service Card
-                    geminiServiceCard
-
-                    // 3. Custom / Detected AI Services Cards
-                    ForEach($monitor.customSubscriptions) { $sub in
-                        customSubscriptionCard(sub: $sub)
-                    }
-                }
-                .padding(.trailing, 2)
-            }
-            .frame(maxHeight: 350)
-
-            // Clean Add / Auto-Detect Bar
-            HStack(spacing: 8) {
-                Menu {
-                    ForEach(presetOptions) { item in
-                        let added = isPresetAdded(item.id)
-                        Button(added ? "✓ \(item.label) (追加済)" : "+ \(item.label)") {
-                            monitor.addSubscription(item.config)
-                        }
-                        .disabled(added)
-                    }
-                    Divider()
-                    Button("＋ 新規カスタムサービスを作成...") {
-                        let newCustom = CustomSubscriptionConfig.blankCustom()
-                        monitor.addSubscription(newCustom)
-                        expandedServiceIds.insert(newCustom.id)
-                    }
-                } label: {
-                    Label("サービスを追加", systemImage: "plus.circle.fill")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .controlSize(.small)
-
-                Button {
-                    monitor.autoAddDetectedSubscriptions()
-                    Task {
-                        await monitor.refresh()
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.clockwise")
-                        Text("再検出")
-                    }
-                    .font(.system(size: 11.5))
-                }
-                .controlSize(.small)
-                .help("このMacにインストールされているAIツールを自動検出して追加します")
-
-                Spacer()
-
-                Button {
-                    monitor.sanitizeSettings()
-                    Task {
-                        await monitor.refresh()
-                    }
-                    onClose?()
-                } label: {
-                    Text("完了")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .padding(.horizontal, 12)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            }
-        }
-    }
-
-    // MARK: - Status Badge Helper
-    @ViewBuilder
-    private func statusBadge(hasCustomPath: Bool, isDetected: Bool, customLabel: String? = nil) -> some View {
-        if hasCustomPath {
-            Text("手動パス")
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(.blue)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1.5)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Color.blue.opacity(0.12)))
-        } else if isDetected {
-            Text(customLabel ?? "実ログ検出")
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(.green)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1.5)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Color.green.opacity(0.12)))
-        } else {
-            Text("スタンバイ")
-                .font(.system(size: 9.5, weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1.5)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.06)))
-        }
-    }
-
-    // MARK: - OpenAI Service Card
-    @ViewBuilder
-    private var openAIServiceCard: some View {
-        let isExpanded = isExpanded("openai")
-        let hasCustomPath = monitor.customProviderPaths["openai"] != nil
-        let isDetected = monitor.openaiUsedTokens > 0 || monitor.openaiServerPct != nil
-
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Toggle("", isOn: $monitor.showOpenAISection)
-                    .labelsHidden()
-                    .toggleStyle(.checkbox)
-                    .controlSize(.regular)
-
-                Image(systemName: "brain.head.profile")
-                    .font(.system(size: 14))
-                    .foregroundStyle(monitor.showOpenAISection ? .primary : .secondary)
-                    .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text("OpenAI / Codex")
-                            .font(.system(size: 13, weight: .bold))
-                        statusBadge(hasCustomPath: hasCustomPath, isDetected: isDetected)
-                    }
-                    let costPart = monitor.openaiCostUSD > 0 ? String(format: " · API換算 $%.2f", monitor.openaiCostUSD) : ""
-                    Text("月間: \(formatCompactTokenCount(monitor.openaiUsedTokens)) tokens\(costPart)")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Toggle("メニューバー", isOn: $monitor.showOpenAIInMenuBar)
-                    .font(.system(size: 10.5))
-                    .controlSize(.mini)
-                    .disabled(!monitor.showOpenAISection)
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        toggleExpanded("openai")
-                    }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        Text(isExpanded ? "閉じる" : "詳細")
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.05)))
-                }
-                .buttonStyle(.plain)
-            }
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 8) {
-                    Divider()
-                    builtInPeriodToggleRow(isOpenAI: true, csv: monitor.openaiEnabledPeriodsCSV)
-
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .twoHours) {
-                        limitInputRow(label: "2時間上限 (tokens)", value: $monitor.openaiTokenLimit2h)
-                    }
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .fiveHours) {
-                        limitInputRow(label: "5時間上限 (tokens)", value: $monitor.openaiTokenLimit5h)
-                    }
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .daily) {
-                        limitInputRow(label: "1日上限 (tokens)", value: $monitor.openaiTokenLimitDaily)
-                    }
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .weekly) {
-                        limitInputRow(label: "週次上限 (tokens)", value: $monitor.openaiTokenLimitWeekly)
-                    }
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.openaiEnabledPeriodsCSV, period: .monthly) {
-                        limitInputRow(label: "月次上限 (tokens)", value: $monitor.openaiTokenLimit)
-                    }
-
-                    inlinePathEditor(for: "openai")
-
-                    HStack(spacing: 6) {
-                        if revealAdminKey {
-                            TextField("OpenAI Admin Key (組織API同期用・任意)", text: $monitor.openaiAdminKey)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 11))
-                        } else {
-                            SecureField("OpenAI Admin Key (組織API同期用・任意)", text: $monitor.openaiAdminKey)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 11))
-                        }
-                        Button {
-                            revealAdminKey.toggle()
-                        } label: {
-                            Image(systemName: revealAdminKey ? "eye.slash" : "eye")
-                                .font(.system(size: 11))
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                }
-                .padding(.top, 2)
-            }
-        }
-        .padding(9)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
-    }
-
-    // MARK: - Gemini Service Card
-    @ViewBuilder
-    private var geminiServiceCard: some View {
-        let isExpanded = isExpanded("gemini")
-        let hasCustomPath = monitor.customProviderPaths["gemini"] != nil
-        let isDetected = monitor.geminiUsedTokens > 0
-
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Toggle("", isOn: $monitor.showGeminiSection)
-                    .labelsHidden()
-                    .toggleStyle(.checkbox)
-                    .controlSize(.regular)
-
-                Image(systemName: "sparkle")
-                    .font(.system(size: 14))
-                    .foregroundStyle(monitor.showGeminiSection ? .primary : .secondary)
-                    .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text("Google Gemini")
-                            .font(.system(size: 13, weight: .bold))
-                        statusBadge(hasCustomPath: hasCustomPath, isDetected: isDetected)
-                    }
-                    let costPart = monitor.geminiCostUSD > 0 ? String(format: " · API換算 $%.2f", monitor.geminiCostUSD) : ""
-                    Text("月間: \(formatCompactTokenCount(monitor.geminiUsedTokens)) tokens\(costPart)")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Toggle("メニューバー", isOn: $monitor.showGeminiInMenuBar)
-                    .font(.system(size: 10.5))
-                    .controlSize(.mini)
-                    .disabled(!monitor.showGeminiSection)
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        toggleExpanded("gemini")
-                    }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        Text(isExpanded ? "閉じる" : "詳細")
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.05)))
-                }
-                .buttonStyle(.plain)
-            }
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 8) {
-                    Divider()
-                    builtInPeriodToggleRow(isOpenAI: false, csv: monitor.geminiEnabledPeriodsCSV)
-
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .twoHours) {
-                        limitInputRow(label: "2時間上限 (tokens)", value: $monitor.geminiTokenLimit2h)
-                    }
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .fiveHours) {
-                        limitInputRow(label: "5時間上限 (tokens)", value: $monitor.geminiTokenLimit5h)
-                    }
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .daily) {
-                        limitInputRow(label: "1日上限 (tokens)", value: $monitor.geminiTokenLimitDaily)
-                    }
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .weekly) {
-                        limitInputRow(label: "週次上限 (tokens)", value: $monitor.geminiTokenLimitWeekly)
-                    }
-                    if monitor.isBuiltInPeriodEnabled(csv: monitor.geminiEnabledPeriodsCSV, period: .monthly) {
-                        limitInputRow(label: "月次上限 (tokens)", value: $monitor.geminiTokenLimit)
-                    }
-
-                    inlinePathEditor(for: "gemini")
-
-                    TextField("GCP Project ID (Cloud Monitoring同期用・任意)", text: $monitor.gcpProjectId)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11))
-                }
-                .padding(.top, 2)
-            }
-        }
-        .padding(9)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
-    }
-
-    // MARK: - Custom Subscription Card
-    @ViewBuilder
-    private func customSubscriptionCard(sub: Binding<CustomSubscriptionConfig>) -> some View {
-        let currentSub = sub.wrappedValue
-        let isExpanded = isExpanded(currentSub.id)
-        let baseKey = currentSub.id.split(separator: "_").first.map(String.init) ?? currentSub.id
-        let live = monitor.customProviderLiveUsage[currentSub.id] ?? monitor.customProviderLiveUsage[baseKey]
-        let unit = providerUnit(for: currentSub.id)
-        let hasCustomPath = monitor.customProviderPaths[currentSub.id] != nil
-        let monthlyCount = live?.usedByPeriod?.monthly ?? currentSub.manualUsedMonthly
-        let isDetected = monitor.detectedProviderIds.contains(baseKey) || monthlyCount > 0
-        let effCost = monitor.effectiveCostUSD(for: currentSub)
-
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Toggle("", isOn: sub.isEnabled)
-                    .labelsHidden()
-                    .toggleStyle(.checkbox)
-                    .controlSize(.regular)
-
-                Image(systemName: currentSub.iconName)
-                    .font(.system(size: 14))
-                    .foregroundStyle(currentSub.isEnabled ? .primary : .secondary)
-                    .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(currentSub.name)
-                            .font(.system(size: 13, weight: .bold))
-                        statusBadge(
-                            hasCustomPath: hasCustomPath,
-                            isDetected: isDetected,
-                            customLabel: live?.status ?? (currentSub.statusNote.isEmpty ? nil : currentSub.statusNote)
-                        )
-                    }
-
-                    let costPart = effCost > 0 ? String(format: " · $%.2f", effCost) : ""
-                    Text("月間: \(formatCompactUsage(monthlyCount, unit: unit)) \(unit)\(costPart)")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Toggle("メニューバー", isOn: sub.showInMenuBar)
-                    .font(.system(size: 10.5))
-                    .controlSize(.mini)
-                    .disabled(!currentSub.isEnabled)
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        toggleExpanded(currentSub.id)
-                    }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        Text(isExpanded ? "閉じる" : "詳細")
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.05)))
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    monitor.removeSubscription(id: currentSub.id)
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .padding(3)
-                }
-                .buttonStyle(.plain)
-                .help("サービスを削除")
-            }
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 8) {
-                    Divider()
-
-                    HStack(spacing: 6) {
-                        Text("表示枠")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        ForEach(LimitPeriod.allCases) { period in
-                            let isOn = currentSub.isPeriodEnabled(period)
-                            Button {
-                                sub.wrappedValue.setPeriod(period, enabled: !isOn)
-                                monitor.isDetailedView = true
-                            } label: {
-                                Text(period.label)
-                                    .font(.system(size: 11, weight: isOn ? .semibold : .regular))
-                                    .foregroundStyle(isOn ? .primary : .secondary)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 3)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                            .fill(isOn ? Color.primary.opacity(0.14) : Color.primary.opacity(0.04))
-                                    )
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    if currentSub.isPeriodEnabled(.twoHours) {
-                        limitInputRow(label: "2時間上限 (\(unit))", value: sub.limit2h)
-                    }
-                    if currentSub.isPeriodEnabled(.fiveHours) {
-                        limitInputRow(label: "5時間上限 (\(unit))", value: sub.limit5h)
-                    }
-                    if currentSub.isPeriodEnabled(.daily) {
-                        limitInputRow(label: "1日上限 (\(unit))", value: sub.limitDaily)
-                    }
-                    if currentSub.isPeriodEnabled(.weekly) {
-                        limitInputRow(label: "週次上限 (\(unit))", value: sub.limitWeekly)
-                    }
-                    if currentSub.isPeriodEnabled(.monthly) {
-                        limitInputRow(label: "月次上限 (\(unit))", value: sub.limitMonthly)
-                    }
-
-                    inlinePathEditor(for: currentSub.id)
-
-                    HStack(spacing: 6) {
-                        Text("名称/略称")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        TextField("サービス名", text: sub.name)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 11))
-                            .frame(width: 130)
-                        TextField("略称", text: sub.shortName)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 11))
-                            .frame(width: 55)
-                    }
-                }
-                .padding(.top, 2)
-            }
-        }
-        .padding(9)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.04)))
-    }
-
-    // MARK: - Inline Log Path Editor
-    @ViewBuilder
-    private func inlinePathEditor(for serviceId: String) -> some View {
-        let hint = defaultLogPathHint(for: serviceId)
-        let currentSaved = monitor.customProviderPaths[serviceId]
-        let inputBinding = Binding<String>(
-            get: { pathInputs[serviceId] ?? currentSaved ?? "" },
-            set: { pathInputs[serviceId] = $0 }
-        )
-
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Text("ログパス")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-
-                TextField(hint, text: inputBinding)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
-
-                Button("参照...") {
-                    let panel = NSOpenPanel()
-                    panel.canChooseFiles = true
-                    panel.canChooseDirectories = true
-                    panel.allowsMultipleSelection = false
-                    panel.prompt = "選択"
-                    panel.message = "\(serviceId) のログファイルまたはフォルダを選択してください"
-                    NSApplication.shared.activate(ignoringOtherApps: true)
-                    if panel.runModal() == .OK, let url = panel.url {
-                        pathInputs[serviceId] = url.path
-                        applyCustomPath(for: serviceId, path: url.path)
-                    }
-                }
-                .controlSize(.mini)
-
-                Button("適用") {
-                    applyCustomPath(for: serviceId, path: inputBinding.wrappedValue)
-                }
-                .controlSize(.mini)
-
-                if currentSaved != nil {
-                    Button("リセット") {
-                        monitor.setCustomPath(for: serviceId, path: "")
-                        pathInputs[serviceId] = ""
-                        pathValidationResults.removeValue(forKey: serviceId)
-                        Task { await monitor.refresh() }
-                    }
-                    .controlSize(.mini)
-                }
-            }
-
-            if let result = pathValidationResults[serviceId] {
-                HStack(spacing: 4) {
-                    Image(systemName: result.isValid ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    Text(result.message)
-                }
-                .font(.system(size: 10.5))
-                .foregroundStyle(result.isValid ? .green : .orange)
-            }
-        }
-    }
-
-    private func applyCustomPath(for serviceId: String, path: String) {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            monitor.setCustomPath(for: serviceId, path: "")
-            pathValidationResults.removeValue(forKey: serviceId)
-            Task { await monitor.refresh() }
-            return
-        }
-        let res = LocalUsageCollector.validateAndScan(providerId: serviceId, path: trimmed)
-        pathValidationResults[serviceId] = res
-        if res.isValid {
-            monitor.setCustomPath(for: serviceId, path: trimmed)
-            Task { await monitor.refresh() }
-        }
-    }
-
-    @ViewBuilder
-    private func builtInPeriodToggleRow(isOpenAI: Bool, csv: String) -> some View {
-        HStack(spacing: 6) {
-            Text("表示枠")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
-            ForEach(LimitPeriod.allCases) { period in
-                let isOn = monitor.isBuiltInPeriodEnabled(csv: csv, period: period)
-                Button {
-                    monitor.setBuiltInPeriod(isOpenAI: isOpenAI, period: period, enabled: !isOn)
-                } label: {
-                    Text(period.label)
-                        .font(.system(size: 11, weight: isOn ? .semibold : .regular))
-                        .foregroundStyle(isOn ? .primary : .secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(isOn ? Color.primary.opacity(0.14) : Color.primary.opacity(0.04))
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func limitInputRow(label: String, value: Binding<Int>) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
-            TextField("上限", value: value, format: .number)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11))
-                .frame(width: 110)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+            )
         }
     }
 }
@@ -1928,8 +1226,7 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
     }
 
     static func configure(window: NSWindow, allowBackgroundDrag: Bool, isPinned: Bool) {
-        window.styleMask.insert([.titled, .fullSizeContentView, .closable, .miniaturizable])
-        window.styleMask.remove([.resizable])
+        window.styleMask.insert([.titled, .fullSizeContentView, .closable, .miniaturizable, .resizable])
         window.level = isPinned ? .floating : .normal
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isMovableByWindowBackground = allowBackgroundDrag
@@ -1940,7 +1237,7 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
 
-        // ネイティブ macOS トラフィックライト（標準の閉じる・最小化ボタン）を表示
+        // ネイティブ macOS トラフィックライト（標準の閉じる・最小化・ズームの3連ボタン）を完全に有効化
         if let closeBtn = window.standardWindowButton(.closeButton) {
             closeBtn.isHidden = false
             closeBtn.isEnabled = true
@@ -1950,7 +1247,8 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
             miniBtn.isEnabled = true
         }
         if let zoomBtn = window.standardWindowButton(.zoomButton) {
-            zoomBtn.isHidden = true
+            zoomBtn.isHidden = false
+            zoomBtn.isEnabled = true
         }
 
         window.setFrameAutosaveName("AIMeterDesktopWidgetFrame")
@@ -1961,12 +1259,15 @@ struct DesktopWidgetWindowAccessor: NSViewRepresentable {
     }
 }
 
-// MARK: - Main Card View (Simple, High-Legibility Design)
+func openSettingsWindow(openWindow: OpenWindowAction) {
+    NSApplication.shared.activate(ignoringOtherApps: true)
+    openWindow(id: "settings")
+}
+
+// MARK: - Main Card View (macOS Native HIG Design)
 struct AIMeterCardView: View {
     @ObservedObject var monitor: UsageMonitor
     var isMenuBar: Bool = false
-    @State private var showSettings: Bool = false
-    @State private var showHelp: Bool = false
     @Environment(\.openWindow) private var openWindow
 
     private static let timeFormatter: DateFormatter = {
@@ -1988,65 +1289,44 @@ struct AIMeterCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if showHelp {
-                HelpView(isMenuBar: isMenuBar) {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        showHelp = false
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            // Header (Finder / macOS Native Unified Toolbar Style)
+            HStack(spacing: 8) {
+                if !isMenuBar {
+                    // ネイティブ macOS トラフィックライト（赤・黄・緑の3連）用のインセット
+                    Color.clear
+                        .frame(width: 72, height: 26)
+                        .accessibilityHidden(true)
                 }
-            } else if showSettings {
-                SettingsPopoverView(
-                    monitor: monitor,
-                    isMenuBar: isMenuBar,
-                    onOpenHelp: {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            showSettings = false
-                            showHelp = true
-                        }
-                    },
-                    onClose: {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            showSettings = false
-                        }
-                    }
-                )
-            } else {
-                // Header
-                HStack(spacing: 6) {
-                    if !isMenuBar {
-                        // ネイティブ macOS トラフィックライト（閉じる・最小化）用のスペース
-                        Color.clear
-                            .frame(width: 52, height: 16)
-                            .accessibilityHidden(true)
-                    }
 
-                    Text("AIMeter")
-                        .font(.system(size: 13.5, weight: .bold))
-                        .foregroundStyle(.primary)
+                Text("AIMeter")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
 
-                    Spacer()
+                Spacer()
 
-                    // 要点 / 全枠 切り替えボタン
+                // macOS Native Capsule Toolbar Item Group (Finderスタイル・均等アイコン配置)
+                HStack(spacing: 2) {
+                    // 1. 要点 / 全枠 トグル (Finder表示切替スタイル)
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             monitor.isDetailedView.toggle()
                         }
                     } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: monitor.isDetailedView ? "list.bullet" : "sparkles.rectangle.stack")
-                            Text(monitor.isDetailedView ? "全枠" : "要点")
-                        }
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(monitor.isDetailedView ? Color.accentColor : Color.secondary)
-                        .padding(.horizontal, 7)
-                        .frame(height: 22)
-                        .contentShape(Rectangle())
+                        Image(systemName: monitor.isDetailedView ? "list.bullet" : "sparkles.rectangle.stack")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(monitor.isDetailedView ? Color.accentColor : Color.secondary)
+                            .frame(width: 24, height: 22)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(GlassCapsuleButtonStyle(isSelected: monitor.isDetailedView))
-                    .help(monitor.isDetailedView ? "全枠表示中（クリックで最逼迫＋月次の要点表示に短縮）" : "要点表示中（クリックで設定した全枠を表示）")
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .help(monitor.isDetailedView ? "全枠表示中（クリックで要点表示に短縮）" : "要点表示中（クリックで全枠を表示）")
 
-                    // 更新ボタン (更新中はスピナー表示)
+                    Divider()
+                        .frame(height: 12)
+
+                    // 2. 更新ボタン (更新中はスピナー表示)
                     Button {
                         Task {
                             await monitor.refresh()
@@ -2065,138 +1345,162 @@ struct AIMeterCardView: View {
                         .frame(width: 24, height: 22)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(GlassCapsuleButtonStyle())
+                    .buttonStyle(.plain)
+                    .focusable(false)
                     .disabled(monitor.isRefreshing)
                     .help("今すぐ更新")
                     .accessibilityLabel("今すぐ更新")
 
-                    // ウィジェット専用: 最前面ピン留めトグル
+                    // 3. ウィジェット専用: 最前面ピン留めトグル
                     if !isMenuBar {
+                        Divider()
+                            .frame(height: 12)
+
                         Button {
                             withAnimation(.easeInOut(duration: 0.15)) {
                                 monitor.isWidgetPinned.toggle()
                             }
                         } label: {
-                            Image(systemName: monitor.isWidgetPinned ? "pin.fill" : "pin.slash")
+                            Image(systemName: monitor.isWidgetPinned ? "pin.fill" : "pin")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(monitor.isWidgetPinned ? Color.accentColor : Color.secondary)
                                 .frame(width: 24, height: 22)
                                 .contentShape(Rectangle())
                         }
-                        .buttonStyle(GlassCapsuleButtonStyle(isSelected: monitor.isWidgetPinned))
+                        .buttonStyle(.plain)
+                        .focusable(false)
                         .help(monitor.isWidgetPinned ? "最前面固定中 (クリックで解除)" : "通常ウィンドウ (クリックで最前面固定)")
                     }
 
-                    // 設定ボタン
+                    Divider()
+                        .frame(height: 12)
+
+                    // 4. 設定ボタン (macOS標準設定ウィンドウを開く)
                     Button {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            showSettings = true
-                        }
+                        openSettingsWindow(openWindow: openWindow)
                     } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "slider.horizontal.3")
-                            Text("設定")
-                        }
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 7)
-                        .frame(height: 22)
-                        .contentShape(Rectangle())
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 22)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(GlassCapsuleButtonStyle())
-                    .help("サービス・パス・上限の設定")
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .help("設定を開く (⌘,)")
                     .accessibilityLabel("設定を開く")
                 }
+                .padding(.horizontal, 3)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.85))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                )
+            }
+            .frame(height: 26)
 
-                // Provider Sections
-                if totalVisibleProvidersCount == 0 {
-                    VStack(spacing: 8) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 18))
-                            .foregroundStyle(.tertiary)
-                        Text("表示するAIサービスが選択されていません")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                        Button("設定からサービスを有効化") {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                showSettings = true
-                            }
-                        }
-                        .controlSize(.small)
+            Divider()
+                .opacity(0.35)
+                .padding(.horizontal, -14)
+
+            // Provider Sections
+            if totalVisibleProvidersCount == 0 {
+                ContentUnavailableView {
+                    Label("表示するAIサービスがありません", systemImage: "slider.horizontal.3")
+                } description: {
+                    Text("設定からサービスを有効化してください")
+                } actions: {
+                    Button("設定を開く...") {
+                        openSettingsWindow(openWindow: openWindow)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 20)
-                } else if totalVisibleProvidersCount > 3 {
-                    ScrollView {
-                        providerSectionsStack
-                    }
-                    .frame(maxHeight: 360)
-                } else {
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+            } else if isMenuBar && totalVisibleProvidersCount > 3 {
+                ScrollView {
                     providerSectionsStack
+                        .padding(.trailing, 2)
                 }
+                .frame(maxHeight: 380)
+            } else if !isMenuBar && totalVisibleProvidersCount > 5 {
+                ScrollView {
+                    providerSectionsStack
+                        .padding(.trailing, 2)
+                }
+                .frame(maxHeight: 520)
+            } else {
+                providerSectionsStack
+            }
 
-                // Quiet Footer
-                HStack {
-                    Text("\(Self.timeFormatter.string(from: monitor.lastUpdated)) 更新")
-                        .font(.system(size: 10.5).monospacedDigit())
+            // Quiet Footer
+            HStack {
+                Text("\(Self.timeFormatter.string(from: monitor.lastUpdated)) 更新")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                if monitor.totalCostUSD > 0 {
+                    Text(String(format: "API換算 $%.2f", monitor.totalCostUSD))
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Mac内ログ自動集計")
+                        .font(.caption2)
                         .foregroundStyle(.tertiary)
-                    Spacer()
-                    if monitor.totalCostUSD > 0 {
-                        Text(String(format: "API換算 $%.2f", monitor.totalCostUSD))
-                            .font(.system(size: 11, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Mac内ログ自動集計")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.tertiary)
-                    }
                 }
-                .padding(.top, 1)
+            }
+            .padding(.top, 2)
 
-                if isMenuBar {
-                    Divider()
-                    HStack(spacing: 8) {
-                        Button(monitor.isDesktopWidgetOpen ? "ウィジェットを閉じる" : "ウィジェットを表示") {
-                            if monitor.isDesktopWidgetOpen {
-                                closeDesktopWidgetWindow(monitor: monitor)
-                            } else {
-                                openOrRestoreDesktopWidgetWindow(monitor: monitor) { id in
-                                    openWindow(id: id)
-                                }
+            if isMenuBar {
+                Divider()
+                HStack(spacing: 8) {
+                    Button(monitor.isDesktopWidgetOpen ? "ウィジェットを非表示" : "ウィジェットを表示") {
+                        if monitor.isDesktopWidgetOpen {
+                            closeDesktopWidgetWindow(monitor: monitor)
+                        } else {
+                            openOrRestoreDesktopWidgetWindow(monitor: monitor) { id in
+                                openWindow(id: id)
                             }
                         }
-                        .controlSize(.small)
-
-                        Spacer()
-
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                showHelp = true
-                            }
-                        } label: {
-                            Image(systemName: "questionmark.circle")
-                        }
-                        .controlSize(.small)
-                        .help("ヘルプ & Q&A")
-
-                        Button("終了") {
-                            NSApplication.shared.terminate(nil)
-                        }
-                        .controlSize(.small)
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Spacer()
+
+                    Button("設定...") {
+                        openSettingsWindow(openWindow: openWindow)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("終了") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
         }
-        .padding(14)
-        .frame(width: (showSettings || showHelp) ? 380 : 320)
-        .background(
-            LiquidGlassBackground(cornerRadius: 16)
+        .padding(.horizontal, 14)
+        .padding(.top, isMenuBar ? 14 : 9)
+        .padding(.bottom, 14)
+        .frame(width: 348)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.3), lineWidth: 0.5)
         )
         .background(
             Group {
                 if !isMenuBar {
                     DesktopWidgetWindowAccessor(
-                        allowBackgroundDrag: !showSettings && !showHelp,
+                        allowBackgroundDrag: true,
                         isPinned: monitor.isWidgetPinned,
                         onVisibilityChange: { visible in
                             if monitor.isDesktopWidgetOpen != visible {
@@ -2235,17 +1539,13 @@ struct AIMeterCardView: View {
         }
         .background(
             Group {
-                if showHelp || showSettings {
-                    // 設定・ヘルプ表示中の ESC はメイン画面へ戻る
-                    Button("") {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            showHelp = false
-                            showSettings = false
-                        }
-                    }
-                    .keyboardShortcut(.cancelAction)
-                    .opacity(0)
-                } else if !isMenuBar {
+                Button("") {
+                    openSettingsWindow(openWindow: openWindow)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+                .opacity(0)
+
+                if !isMenuBar {
                     // メイン画面での ⌘W / ESC: ウィジェットを閉じる
                     Button("") {
                         closeDesktopWidgetWindow(monitor: monitor)
@@ -2351,5 +1651,14 @@ struct AIMeterApp: App {
             .font(.system(size: 13, weight: .semibold).monospacedDigit())
         }
         .menuBarExtraStyle(.window)
+
+        Window("AIMeter 設定", id: "settings") {
+            SettingsView(monitor: monitor)
+        }
+        .windowResizability(.contentSize)
+
+        Settings {
+            SettingsView(monitor: monitor)
+        }
     }
 }
