@@ -105,8 +105,14 @@ private struct GeneralSettingsView: View {
 
             Section("データ更新") {
                 LabeledContent("前回の更新") {
-                    Text(monitor.lastUpdated, style: .time)
-                        .foregroundStyle(.secondary)
+                    Group {
+                        if let date = monitor.lastUpdated {
+                            Text(date, style: .time)
+                        } else {
+                            Text("未取得")
+                        }
+                    }
+                    .foregroundStyle(.secondary)
                 }
 
                 HStack {

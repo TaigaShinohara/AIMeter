@@ -4,6 +4,7 @@ import Foundation
 import Security
 import ServiceManagement
 import AIMeterCore
+import Combine
 
 // MARK: - Notifications
 extension Notification.Name {
@@ -191,20 +192,56 @@ final class UsageMonitor: ObservableObject {
     @Published var geminiCostUSD: Double = 0.0
     @Published var geminiStatus: String = "実ログ"
 
-    @Published var lastUpdated: Date = Date()
+    @Published var lastUpdated: Date?
     @Published var isRefreshing: Bool = false
     @Published var collectionError: String?
 
+    private var settingsObserver: AnyCancellable?
+    private var hasUsageSnapshot = false
+    private var widgetUpdatedAt: Date?
+    @Published var widgetSharingError: String?
     private var timer: Timer?
     private var wakeObserver: NSObjectProtocol?
     private let urlSession: URLSession
     private var isLoadingSubscriptions: Bool = false
 
-    init() {
+    init(defaults: UserDefaults = .standard, startMonitoring: Bool = true) {
+        _didCalibrateRealLimitsV1 = AppStorage(wrappedValue: false, "didCalibrateRealLimitsV1", store: defaults)
+        _didAutoSeedLocalProvidersV2 = AppStorage(wrappedValue: false, "didAutoSeedLocalProvidersV2", store: defaults)
+        _didMigrateHonestCostsV3 = AppStorage(wrappedValue: false, "didMigrateHonestCostsV3", store: defaults)
+        _hasCompletedSetupWizard = AppStorage(wrappedValue: true, "hasCompletedSetupWizard", store: defaults)
+        _autoShowWidgetOnLaunch = AppStorage(wrappedValue: true, "autoShowWidgetOnLaunch", store: defaults)
+        _customProviderPathsJSON = AppStorage(wrappedValue: "{}", "customProviderPathsJSON", store: defaults)
+        _legacyOpenaiAdminKey = AppStorage(wrappedValue: "", "openaiAdminKey", store: defaults)
+        _showOpenAISection = AppStorage(wrappedValue: true, "showOpenAISection", store: defaults)
+        _showGeminiSection = AppStorage(wrappedValue: true, "showGeminiSection", store: defaults)
+        _showOpenAIInMenuBar = AppStorage(wrappedValue: true, "showOpenAIInMenuBar", store: defaults)
+        _showGeminiInMenuBar = AppStorage(wrappedValue: true, "showGeminiInMenuBar", store: defaults)
+        _openaiEnabledPeriodsCSV = AppStorage(wrappedValue: "5h,7d,30d", "openaiEnabledPeriodsCSV", store: defaults)
+        _geminiEnabledPeriodsCSV = AppStorage(wrappedValue: "5h,1d,7d,30d", "geminiEnabledPeriodsCSV", store: defaults)
+        _openaiTokenLimit2h = AppStorage(wrappedValue: 20_000_000, "openaiTokenLimit2h", store: defaults)
+        _openaiTokenLimit5h = AppStorage(wrappedValue: 40_000_000, "openaiTokenLimit5h", store: defaults)
+        _openaiTokenLimitDaily = AppStorage(wrappedValue: 80_000_000, "openaiTokenLimitDaily", store: defaults)
+        _openaiTokenLimitWeekly = AppStorage(wrappedValue: 290_000_000, "openaiTokenLimitWeekly", store: defaults)
+        _openaiTokenLimit = AppStorage(wrappedValue: 800_000_000, "openaiTokenLimit", store: defaults)
+        _openaiBudgetUSD = AppStorage(wrappedValue: 600.0, "openaiBudgetUSD", store: defaults)
+        _gcpProjectId = AppStorage(wrappedValue: "", "gcpProjectId", store: defaults)
+        _geminiTokenLimit2h = AppStorage(wrappedValue: 750_000, "geminiTokenLimit2h", store: defaults)
+        _geminiTokenLimit5h = AppStorage(wrappedValue: 1_500_000, "geminiTokenLimit5h", store: defaults)
+        _geminiTokenLimitDaily = AppStorage(wrappedValue: 4_000_000, "geminiTokenLimitDaily", store: defaults)
+        _geminiTokenLimitWeekly = AppStorage(wrappedValue: 15_000_000, "geminiTokenLimitWeekly", store: defaults)
+        _geminiTokenLimit = AppStorage(wrappedValue: 40_000_000, "geminiTokenLimit", store: defaults)
+        _geminiBudgetUSD = AppStorage(wrappedValue: 20.0, "geminiBudgetUSD", store: defaults)
+        _customSubscriptionsJSON = AppStorage(wrappedValue: "[]", "customSubscriptionsJSON", store: defaults)
+        _menuBarPeriodMode = AppStorage(wrappedValue: "min", "menuBarPeriodMode", store: defaults)
+        _menuBarDisplayMode = AppStorage(wrappedValue: "smart", "menuBarDisplayMode", store: defaults)
+        _isDetailedView = AppStorage(wrappedValue: false, "isDetailedView", store: defaults)
+        _isWidgetPinned = AppStorage(wrappedValue: true, "isWidgetPinned", store: defaults)
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15.0
         config.timeoutIntervalForResource = 30.0
         self.urlSession = URLSession(configuration: config)
+        guard startMonitoring else { return }
 
         if let savedKey = KeychainHelper.load(key: "openaiAdminKey"), !savedKey.isEmpty {
             self.openaiAdminKey = savedKey
@@ -235,6 +272,8 @@ final class UsageMonitor: ObservableObject {
 
         loadCustomSubscriptions()
         sanitizeSettings()
+        restoreLocalSnapshot()
+        observeWidgetSettings()
 
         Task {
             await refresh()
@@ -577,14 +616,17 @@ final class UsageMonitor: ObservableObject {
         collectionError = nil
         sanitizeSettings()
         defer {
-            if collectionError == nil { lastUpdated = Date() }
+            if collectionError == nil {
+                lastUpdated = Date()
+                widgetUpdatedAt = lastUpdated
+            }
             isRefreshing = false
-            SharedStore.reloadWidgetTimelines()
+            publishWidgetSnapshot()
         }
 
         let error = await RefreshSequence.run(local: {
             try await runLocalCollectorScript()
-            applyLocalSnapshot()
+            applyLocalSnapshot(loadLocalJSON())
         }, remote: {
             await refreshConfiguredAPIs()
         })
@@ -593,9 +635,60 @@ final class UsageMonitor: ObservableObject {
         }
     }
 
-    private func applyLocalSnapshot() {
-        let localData = loadLocalJSON()
+    /// Both the floating window and WidgetKit use these exact, resolved metrics.
+    func widgetSnapshot() -> AIMeterWidgetSnapshot {
+        var services: [WidgetServiceItem] = []
+        if showOpenAISection, let item = WidgetServiceItem.fromMetrics(
+            id: "openai", name: "OpenAI Codex", shortName: "OAI", iconName: "brain.head.profile",
+            unit: "tokens", metrics: openaiMetrics
+        ) { services.append(item) }
+        if showGeminiSection, let item = WidgetServiceItem.fromMetrics(
+            id: "gemini", name: "Gemini", shortName: "Gem", iconName: "sparkle",
+            unit: "tokens", metrics: geminiMetrics
+        ) { services.append(item) }
+        for sub in customSubscriptions where sub.isEnabled {
+            if let item = WidgetServiceItem.fromMetrics(
+                id: sub.id, name: sub.name, shortName: sub.shortName, iconName: sub.iconName,
+                unit: providerUnit(for: sub.id), metrics: metrics(for: sub)
+            ) { services.append(item) }
+        }
+        return .make(services: services, totalCostUSD: totalCostUSD,
+                     updatedAt: widgetUpdatedAt, hasData: hasUsageSnapshot,
+                     updateFailed: collectionError != nil)
+    }
+
+    func observeWidgetSettings(to customURL: URL? = nil) {
+        settingsObserver = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, !self.isRefreshing else { return }
+                self.publishWidgetSnapshot(to: customURL)
+            }
+    }
+
+    func publishWidgetSnapshot(to customURL: URL? = nil) {
+        do {
+            try SharedStore.saveWidgetSnapshot(widgetSnapshot(), to: customURL)
+            widgetSharingError = nil
+            if customURL == nil { SharedStore.reloadWidgetTimelines() }
+        } catch {
+            widgetSharingError = "Widgetの表示情報を保存できませんでした。更新を再試行してください"
+        }
+    }
+
+    func recordUsageUpdate(at date: Date = Date()) {
+        hasUsageSnapshot = true
+        widgetUpdatedAt = date
+        lastUpdated = date
+    }
+
+    func restoreLocalSnapshot(from customURL: URL? = nil) {
+        applyLocalSnapshot(loadLocalJSON(from: customURL))
+    }
+
+    func applyLocalSnapshot(_ localData: LocalUsageData?) {
         if let localData {
+            recordUsageUpdate(at: localData.updatedAt.flatMap(LocalUsageCollector.parseISODate) ?? Date())
             let monthlyOpenAI = max(0, localData.openaiUsedByPeriod?.monthly ?? localData.openaiUsedTokens ?? 0)
             openaiUsedTokens = monthlyOpenAI
             openaiUsedWeekly = max(0, localData.openaiUsedByPeriod?.weekly ?? 0)
@@ -659,6 +752,9 @@ final class UsageMonitor: ObservableObject {
             }
             geminiStatus = "実ログ"
         } else {
+            hasUsageSnapshot = false
+            widgetUpdatedAt = nil
+            lastUpdated = nil
             openaiUsed2h = 0
             openaiUsed5h = 0
             openaiUsedDaily = 0
@@ -744,6 +840,7 @@ final class UsageMonitor: ObservableObject {
             if let totalCost = try? await fetchPaginatedOpenAICosts(apiKey: apiKey, startTime: monthStart) {
                 self.openaiCostUSD = totalCost
             }
+            recordUsageUpdate()
             openaiStatus = "API"
         } catch {
             // Keep local log status
@@ -866,6 +963,7 @@ final class UsageMonitor: ObservableObject {
                     self.geminiUsed2h = h2
                 }
 
+                recordUsageUpdate()
                 geminiStatus = "GCP"
                 return
             }
@@ -1431,11 +1529,23 @@ struct AIMeterCardView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if let error = monitor.widgetSharingError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             // Quiet Control Center Style Footer
             HStack {
-                Text("\(Self.timeFormatter.string(from: monitor.lastUpdated)) 更新")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                Group {
+                    if let date = monitor.lastUpdated {
+                        Text("\(Self.timeFormatter.string(from: date)) 更新")
+                    } else {
+                        Text("データ未取得")
+                    }
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
                 Spacer()
                 if monitor.totalCostUSD > 0 {
                     Text(String(format: "API換算 $%.2f", monitor.totalCostUSD))

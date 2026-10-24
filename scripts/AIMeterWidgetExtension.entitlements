@@ -10,7 +10,7 @@
     </array>
     <key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
     <array>
-        <string>/.ai_meter_usage.json</string>
+        <string>/.ai_meter_widget.json</string>
     </array>
 </dict>
 </plist>

@@ -75,10 +75,9 @@ public func formatResetTimestamp(_ epoch: Int?) -> String? {
     return formatter.string(from: date)
 }
 
-public func formatRemainingTime(from epoch: Int?) -> String? {
+public func formatRemainingTime(from epoch: Int?, now: Date = Date()) -> String? {
     guard let epoch, epoch > 0 else { return nil }
     let date = Date(timeIntervalSince1970: TimeInterval(epoch))
-    let now = Date()
     let diff = date.timeIntervalSince(now)
 
     if diff <= 0 {
