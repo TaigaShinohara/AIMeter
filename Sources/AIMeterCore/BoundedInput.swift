@@ -47,11 +47,20 @@ public final class BoundedInput {
         guard ProcessInfo.processInfo.systemUptime < deadline else { throw Failure.limit }
     }
 
-    public func files(at root: URL) throws -> [URL] {
+    public func files(
+        at root: URL,
+        includeHidden: Bool = false,
+        allowedHiddenNames: Set<String> = []
+    ) throws -> [URL] {
         try check()
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) else { return [] }
-        if !isDirectory.boolValue { return [root] }
+        var info = stat()
+        if Darwin.lstat(root.path, &info) != 0 {
+            if errno == ENOENT || errno == ENOTDIR { return [] }
+            throw Failure.file
+        }
+        let mode = info.st_mode & S_IFMT
+        if mode == S_IFREG { return [root] }
+        guard mode == S_IFDIR else { throw Failure.file }
         var failure: Error?
         guard let iterator = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isHiddenKey],
@@ -64,7 +73,11 @@ public final class BoundedInput {
             guard entryCount < limits.entries else { throw Failure.limit }
             entryCount += 1
             let properties = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isHiddenKey])
-            if properties.isSymbolicLink == true || properties.isHidden == true {
+            if properties.isSymbolicLink == true {
+                iterator.skipDescendants()
+                continue
+            }
+            if properties.isHidden == true && !includeHidden && !allowedHiddenNames.contains(url.lastPathComponent) {
                 iterator.skipDescendants()
                 continue
             }
@@ -117,6 +130,63 @@ public final class BoundedInput {
             result.append(chunk)
         }
         return result
+    }
+
+    public func dataIfPresent(at url: URL) throws -> Data? {
+        try check()
+        var info = stat()
+        if Darwin.lstat(url.path, &info) != 0 {
+            if errno == ENOENT || errno == ENOTDIR { return nil }
+            throw Failure.file
+        }
+        return try data(at: url)
+    }
+
+    public static func writeRegularFileAtomically(_ data: Data, to destination: URL) throws {
+        var destInfo = stat()
+        if Darwin.lstat(destination.path, &destInfo) == 0 {
+            guard (destInfo.st_mode & S_IFMT) == S_IFREG else {
+                throw Failure.file
+            }
+        } else if errno != ENOENT {
+            throw Failure.file
+        }
+
+        let directory = destination.deletingLastPathComponent()
+        var dirInfo = stat()
+        guard Darwin.lstat(directory.path, &dirInfo) == 0,
+              (dirInfo.st_mode & S_IFMT) == S_IFDIR else {
+            throw Failure.file
+        }
+
+        let tempURL = directory.appendingPathComponent(".\(destination.lastPathComponent).\(UUID().uuidString).tmp")
+        let descriptor = Darwin.open(tempURL.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw Failure.file }
+        var closed = false
+        defer {
+            if !closed { Darwin.close(descriptor) }
+            Darwin.unlink(tempURL.path)
+        }
+        guard Darwin.fchmod(descriptor, 0o600) == 0 else { throw Failure.file }
+
+        try data.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            var written = 0
+            while written < rawBuffer.count {
+                let count = Darwin.write(descriptor, baseAddress.advanced(by: written), rawBuffer.count - written)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    throw Failure.file
+                }
+                guard count > 0 else { throw Failure.file }
+                written += count
+            }
+        }
+
+        guard Darwin.fsync(descriptor) == 0 else { throw Failure.file }
+        closed = true
+        guard Darwin.close(descriptor) == 0 else { throw Failure.file }
+        guard Darwin.rename(tempURL.path, destination.path) == 0 else { throw Failure.file }
     }
 
     /// Copy from the checked descriptor into a private file, never reopen the

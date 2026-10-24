@@ -42,6 +42,13 @@ enum LocalUsageCollector {
         ]
     }
 
+    private static func fileInfoIfPresent(at url: URL) throws -> stat? {
+        var info = stat()
+        if Darwin.lstat(url.path, &info) == 0 { return info }
+        if errno == ENOENT || errno == ENOTDIR { return nil }
+        throw BoundedInput.Failure.file
+    }
+
     // MARK: - Validation Result Struct
     struct ProviderPathScanResult: Equatable {
         var isValid: Bool
@@ -63,8 +70,7 @@ enum LocalUsageCollector {
         let worker = Task.detached(priority: .utility) {
             let input = BoundedInput(limits: limits)
             var existingProviders: [String: CustomProviderUsageJSON] = [:]
-            if FileManager.default.fileExists(atPath: destination.path),
-               let existingData = Optional(try input.data(at: destination)),
+            if let existingData = try input.dataIfPresent(at: destination),
                let existingRoot = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any],
                let provs = existingRoot["providers"] as? [String: Any] {
                 let decoder = JSONDecoder()
@@ -148,7 +154,8 @@ enum LocalUsageCollector {
 
     private static func scanPath(providerId: String, path: String, home: URL, input: BoundedInput) throws -> ProviderPathScanResult {
         let expanded = (path as NSString).expandingTildeInPath
-        guard FileManager.default.fileExists(atPath: expanded) else {
+        var scanRootInfo = stat()
+        guard Darwin.lstat(expanded, &scanRootInfo) == 0 else {
             return ProviderPathScanResult(isValid: false, message: "指定されたファイルまたはディレクトリが存在しません", previewCount: 0, statusNote: nil)
         }
 
@@ -227,22 +234,7 @@ enum LocalUsageCollector {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(payload)
-
-        let tempURL = fileURL.deletingLastPathComponent().appendingPathComponent(".ai_meter_usage.\(UUID().uuidString).tmp")
-        do {
-            try data.write(to: tempURL, options: [.atomic])
-            let perms: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
-            try? FileManager.default.setAttributes(perms, ofItemAtPath: tempURL.path)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tempURL)
-            } else {
-                try FileManager.default.moveItem(at: tempURL, to: fileURL)
-            }
-            try? FileManager.default.setAttributes(perms, ofItemAtPath: fileURL.path)
-        } catch {
-            try? FileManager.default.removeItem(at: tempURL)
-            throw error
-        }
+        try BoundedInput.writeRegularFileAtomically(data, to: fileURL)
     }
 
     // MARK: - 1. Codex / OpenAI
@@ -270,68 +262,66 @@ enum LocalUsageCollector {
             codexBase = home.appendingPathComponent(".codex/sessions")
         }
 
-        if FileManager.default.fileExists(atPath: codexBase.path) {
-            for fileURL in try input.files(at: codexBase) {
-                guard fileURL.pathExtension == "jsonl" else { continue }
-                guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
-                      let mdate = attrs.contentModificationDate,
-                      mdate >= cutoff30d else { continue }
+        for fileURL in try input.files(at: codexBase) {
+            guard fileURL.pathExtension == "jsonl" else { continue }
+            guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let mdate = attrs.contentModificationDate,
+                  mdate >= cutoff30d else { continue }
 
-                var prevTuple: (inp: Int, cached: Int, out: Int)?
+            var prevTuple: (inp: Int, cached: Int, out: Int)?
 
-                try input.lines(at: fileURL) { line in
-                    guard line.contains("\"token_count\"") else { return }
-                    guard let lineData = line.data(using: .utf8),
-                          let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                          let payload = obj["payload"] as? [String: Any],
-                          payload["type"] as? String == "token_count" else { return }
+            try input.lines(at: fileURL) { line in
+                guard line.contains("\"token_count\"") else { return }
+                guard let lineData = line.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      let payload = obj["payload"] as? [String: Any],
+                      payload["type"] as? String == "token_count" else { return }
 
-                    let tsStr = obj["timestamp"] as? String ?? ""
-                    if let rl = payload["rate_limits"] as? [String: Any], tsStr > latestRLTimestamp {
-                        latestRLTimestamp = tsStr
-                        latestRL = rl
+                let tsStr = obj["timestamp"] as? String ?? ""
+                if let rl = payload["rate_limits"] as? [String: Any], tsStr > latestRLTimestamp {
+                    latestRLTimestamp = tsStr
+                    latestRL = rl
+                }
+
+                guard let info = payload["info"] as? [String: Any],
+                      let tot = info["total_token_usage"] as? [String: Any],
+                      !tsStr.isEmpty,
+                      let dt = parseISODate(tsStr) else { return }
+
+                let curIn = try UsageNumber.count(tot["input_tokens"])
+                let curCached = try UsageNumber.count(tot["cached_input_tokens"])
+                let curOut = try UsageNumber.count(tot["output_tokens"])
+                let curTuple = (inp: curIn, cached: curCached, out: curOut)
+
+                let dIn: Int
+                let dCached: Int
+                let dOut: Int
+
+                if let prev = prevTuple {
+                    if prev == curTuple { return }
+                    dIn = try UsageNumber.difference(curIn, prev.inp)
+                    dCached = try UsageNumber.difference(curCached, prev.cached)
+                    dOut = try UsageNumber.difference(curOut, prev.out)
+                } else {
+                    dIn = curIn
+                    dCached = curCached
+                    dOut = curOut
+                }
+                prevTuple = curTuple
+
+                let uncachedIn = try UsageNumber.difference(dIn, dCached)
+                let effective = try UsageNumber.sum([uncachedIn, dOut, dCached / 10])
+                let rawTot = try UsageNumber.add(dIn, dOut)
+
+                for (k, cutoffDate) in cutoffs {
+                    if dt >= cutoffDate {
+                        usedCounts[k] = try UsageNumber.add(usedCounts[k, default: 0], effective)
+                        rawCounts[k] = try UsageNumber.add(rawCounts[k, default: 0], rawTot)
                     }
+                }
 
-                    guard let info = payload["info"] as? [String: Any],
-                          let tot = info["total_token_usage"] as? [String: Any],
-                          !tsStr.isEmpty,
-                          let dt = parseISODate(tsStr) else { return }
-
-                    let curIn = try UsageNumber.count(tot["input_tokens"])
-                    let curCached = try UsageNumber.count(tot["cached_input_tokens"])
-                    let curOut = try UsageNumber.count(tot["output_tokens"])
-                    let curTuple = (inp: curIn, cached: curCached, out: curOut)
-
-                    let dIn: Int
-                    let dCached: Int
-                    let dOut: Int
-
-                    if let prev = prevTuple {
-                        if prev == curTuple { return }
-                        dIn = try UsageNumber.difference(curIn, prev.inp)
-                        dCached = try UsageNumber.difference(curCached, prev.cached)
-                        dOut = try UsageNumber.difference(curOut, prev.out)
-                    } else {
-                        dIn = curIn
-                        dCached = curCached
-                        dOut = curOut
-                    }
-                    prevTuple = curTuple
-
-                    let uncachedIn = try UsageNumber.difference(dIn, dCached)
-                    let effective = try UsageNumber.sum([uncachedIn, dOut, dCached / 10])
-                    let rawTot = try UsageNumber.add(dIn, dOut)
-
-                    for (k, cutoffDate) in cutoffs {
-                        if dt >= cutoffDate {
-                            usedCounts[k] = try UsageNumber.add(usedCounts[k, default: 0], effective)
-                            rawCounts[k] = try UsageNumber.add(rawCounts[k, default: 0], rawTot)
-                        }
-                    }
-
-                    if dt >= cutoff30d {
-                        cost30d = try UsageNumber.add(cost30d, (Double(uncachedIn) * 2.50 + Double(dCached) * 0.25 + Double(dOut) * 10.0) / 1_000_000.0)
-                    }
+                if dt >= cutoff30d {
+                    cost30d = try UsageNumber.add(cost30d, (Double(uncachedIn) * 2.50 + Double(dCached) * 0.25 + Double(dOut) * 10.0) / 1_000_000.0)
                 }
             }
         }
@@ -428,91 +418,87 @@ enum LocalUsageCollector {
             agBrainBase = home.appendingPathComponent(".gemini/antigravity/brain")
         }
 
-        if FileManager.default.fileExists(atPath: agBrainBase.path) {
-            for fileURL in try input.files(at: agBrainBase) {
-                guard fileURL.lastPathComponent == "transcript.jsonl" || fileURL.lastPathComponent == "transcript_full.jsonl" else { continue }
-                guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
-                      let mdate = attrs.contentModificationDate,
-                      mdate >= cutoff30d else { continue }
+        for fileURL in try input.files(at: agBrainBase, allowedHiddenNames: [".system_generated"]) {
+            guard fileURL.lastPathComponent == "transcript.jsonl" || fileURL.lastPathComponent == "transcript_full.jsonl" else { continue }
+            guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let mdate = attrs.contentModificationDate,
+                  mdate >= cutoff30d else { continue }
 
-                try input.lines(at: fileURL) { line in
-                    guard line.contains("\"created_at\"") else { return }
-                    guard let lineData = line.data(using: .utf8),
-                          let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                          let tsStr = obj["created_at"] as? String,
-                          let dt = parseISODate(tsStr) else { return }
+            try input.lines(at: fileURL) { line in
+                guard line.contains("\"created_at\"") else { return }
+                guard let lineData = line.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      let tsStr = obj["created_at"] as? String,
+                      let dt = parseISODate(tsStr) else { return }
 
-                    let inp = try UsageNumber.count(obj["input_tokens"])
-                    let cached = try UsageNumber.count(obj["cache_read_tokens"])
-                    let out = try UsageNumber.count(obj["output_tokens"])
+                let inp = try UsageNumber.count(obj["input_tokens"])
+                let cached = try UsageNumber.count(obj["cache_read_tokens"])
+                let out = try UsageNumber.count(obj["output_tokens"])
 
-                    let effective: Int
-                    let rawTot: Int
-                    let stepCost: Double
+                let effective: Int
+                let rawTot: Int
+                let stepCost: Double
 
-                    if try UsageNumber.sum([inp, cached, out]) > 0 {
-                        effective = try UsageNumber.sum([inp, out, cached / 10])
-                        rawTot = try UsageNumber.sum([inp, cached, out])
-                        stepCost = (Double(inp) * 1.25 + Double(cached) * 0.3125 + Double(out) * 5.0) / 1_000_000.0
-                    } else {
-                        let content = (obj["content"] as? String ?? "") + (obj["thinking"] as? String ?? "")
-                        let est = max(1, content.count / 4)
-                        effective = est
-                        rawTot = est
-                        stepCost = (Double(est) * 2.0) / 1_000_000.0
+                if try UsageNumber.sum([inp, cached, out]) > 0 {
+                    effective = try UsageNumber.sum([inp, out, cached / 10])
+                    rawTot = try UsageNumber.sum([inp, cached, out])
+                    stepCost = (Double(inp) * 1.25 + Double(cached) * 0.3125 + Double(out) * 5.0) / 1_000_000.0
+                } else {
+                    let content = (obj["content"] as? String ?? "") + (obj["thinking"] as? String ?? "")
+                    let est = max(1, content.count / 4)
+                    effective = est
+                    rawTot = est
+                    stepCost = (Double(est) * 2.0) / 1_000_000.0
+                }
+
+                for (k, cutoffDate) in cutoffs {
+                    if dt >= cutoffDate {
+                        usedCounts[k] = try UsageNumber.add(usedCounts[k, default: 0], effective)
+                        rawCounts[k] = try UsageNumber.add(rawCounts[k, default: 0], rawTot)
                     }
+                }
 
-                    for (k, cutoffDate) in cutoffs {
-                        if dt >= cutoffDate {
-                            usedCounts[k] = try UsageNumber.add(usedCounts[k, default: 0], effective)
-                            rawCounts[k] = try UsageNumber.add(rawCounts[k, default: 0], rawTot)
-                        }
-                    }
-
-                    if dt >= cutoff30d {
-                        cost30d = try UsageNumber.add(cost30d, stepCost)
-                    }
+                if dt >= cutoff30d {
+                    cost30d = try UsageNumber.add(cost30d, stepCost)
                 }
             }
         }
 
         // Gemini tmp chats
         let chatsBase = home.appendingPathComponent(".gemini/tmp")
-        if FileManager.default.fileExists(atPath: chatsBase.path) {
-            for fileURL in try input.files(at: chatsBase) {
-                guard fileURL.pathExtension == "json", fileURL.path.contains("/chats/") else { continue }
-                guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
-                      let mdate = attrs.contentModificationDate,
-                      mdate >= cutoff30d else { continue }
+        for fileURL in try input.files(at: chatsBase) {
+            guard fileURL.pathExtension == "json", fileURL.path.contains("/chats/") else { continue }
+            guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let mdate = attrs.contentModificationDate,
+                  mdate >= cutoff30d else { continue }
 
-                let fileData = try input.data(at: fileURL)
-                guard
-                      let root = try? JSONSerialization.jsonObject(with: fileData) as? [String: Any],
-                      let messages = root["messages"] as? [[String: Any]] else { continue }
+            let fileData = try input.data(at: fileURL)
+            guard
+                  let root = try? JSONSerialization.jsonObject(with: fileData) as? [String: Any],
+                  let messages = root["messages"] as? [[String: Any]] else { continue }
 
-                for msg in messages {
-                    try input.check()
-                    guard let tsStr = msg["timestamp"] as? String,
-                          let dt = parseISODate(tsStr),
-                          let tokens = msg["tokens"] as? [String: Any] else { continue }
+            for msg in messages {
+                try input.check()
+                guard let tsStr = msg["timestamp"] as? String,
+                      let dt = parseISODate(tsStr),
+                      let tokens = msg["tokens"] as? [String: Any] else { continue }
 
-                    let tot = try UsageNumber.count(tokens["total"])
-                    let cached = try UsageNumber.count(tokens["cached"])
-                    let out = try UsageNumber.count(tokens["output"])
-                    let inp = try UsageNumber.count(tokens["input"])
-                    let uncachedIn = try UsageNumber.difference(inp, cached)
-                    let effective = try UsageNumber.sum([uncachedIn, out, cached / 10])
+                let tot = try UsageNumber.count(tokens["total"])
+                let cached = try UsageNumber.count(tokens["cached"])
+                let out = try UsageNumber.count(tokens["output"])
+                let inp = try UsageNumber.count(tokens["input"])
+                let uncachedIn = try UsageNumber.difference(inp, cached)
+                let effective = try UsageNumber.sum([uncachedIn, out, cached / 10])
 
-                    for (k, cutoffDate) in cutoffs {
-                        if dt >= cutoffDate {
-                            usedCounts[k] = try UsageNumber.add(usedCounts[k, default: 0], effective)
-                            rawCounts[k] = try UsageNumber.add(rawCounts[k, default: 0], tot)
-                        }
+                for (k, cutoffDate) in cutoffs {
+                    if dt >= cutoffDate {
+                        usedCounts[k] = try UsageNumber.add(usedCounts[k, default: 0], effective)
+                        rawCounts[k] = try UsageNumber.add(rawCounts[k, default: 0], tot)
                     }
+                }
 
-                    if dt >= cutoff30d {
-                        cost30d = try UsageNumber.add(cost30d, (Double(uncachedIn) * 1.25 + Double(cached) * 0.3125 + Double(out) * 5.0) / 1_000_000.0)
-                    }
+                if dt >= cutoff30d {
+                    cost30d = try UsageNumber.add(cost30d, (Double(uncachedIn) * 1.25 + Double(cached) * 0.3125 + Double(out) * 5.0) / 1_000_000.0)
                 }
             }
         }
@@ -554,7 +540,6 @@ enum LocalUsageCollector {
 
         for dirName in [""] {
             let subDir = dirName.isEmpty ? claudeBase : claudeBase.appendingPathComponent(dirName)
-            guard FileManager.default.fileExists(atPath: subDir.path) else { continue }
 
             for fileURL in try input.files(at: subDir) {
                 guard fileURL.pathExtension == "jsonl" else { continue }
@@ -595,10 +580,10 @@ enum LocalUsageCollector {
         var statusLabel = "Pro"
         let claudeJSONPath = claudeBase.appendingPathComponent(".claude.json")
         let defaultClaudeJSON = home.appendingPathComponent(".claude.json")
-        let targetJSON = FileManager.default.fileExists(atPath: claudeJSONPath.path) ? claudeJSONPath : defaultClaudeJSON
+        let cData = try input.dataIfPresent(at: claudeJSONPath)
+            ?? (claudeJSONPath == defaultClaudeJSON ? nil : try input.dataIfPresent(at: defaultClaudeJSON))
 
-        if FileManager.default.fileExists(atPath: targetJSON.path),
-           let cData = Optional(try input.data(at: targetJSON)),
+        if let cData,
            let cObj = try? JSONSerialization.jsonObject(with: cData) as? [String: Any] {
             if let tier = cObj["claudeMaxTier"] as? String, tier != "not_max" {
                 statusLabel = "Max (\(tier))"
@@ -654,7 +639,10 @@ enum LocalUsageCollector {
         }
         let dotGrok = home.appendingPathComponent(".grokbot")
 
-        if !FileManager.default.fileExists(atPath: appSupport.path) && !FileManager.default.fileExists(atPath: dotGrok.path) {
+        let hasAppSupport = try fileInfoIfPresent(at: appSupport) != nil
+        let hasDotGrok = try fileInfoIfPresent(at: dotGrok) != nil
+
+        if !hasAppSupport && !hasDotGrok {
             return nil
         }
 
@@ -664,51 +652,49 @@ enum LocalUsageCollector {
         var costUSD: Double = 0.0
         var planLabel = "Grok Bot"
 
-        if FileManager.default.fileExists(atPath: appSupport.path) {
-            do {
-                for fp in try input.files(at: appSupport) where fp.pathExtension == "blob" {
-                    let fn = fp.lastPathComponent
-                    let data = try input.data(at: fp)
-                    guard
-                          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          let val = root["value"] as? [String: Any] else { continue }
+        if hasAppSupport {
+            for fp in try input.files(at: appSupport) where fp.pathExtension == "blob" {
+                let fn = fp.lastPathComponent
+                let data = try input.data(at: fp)
+                guard
+                      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let val = root["value"] as? [String: Any] else { continue }
 
-                    // Base32 key decode to detect cache type
-                    let b32 = fn.replacingOccurrences(of: ".blob", with: "").uppercased()
-                    let decKey = decodeBase32(b32)
+                // Base32 key decode to detect cache type
+                let b32 = fn.replacingOccurrences(of: ".blob", with: "").uppercased()
+                let decKey = decodeBase32(b32)
 
-                    if decKey.contains("weekly-usage.cache") {
-                        if let reading = val["reading"] as? [String: Any],
-                           let usage = reading["usage"] as? [String: Any] {
-                            if let rawPercent = usage["percentUsed"] {
-                                let pct = try UsageNumber.nonnegative(rawPercent)
-                                serverPctDict["7d"] = round(pct * 100) / 100.0
-                            }
-                            if let rawReset = usage["nextResetMs"] {
-                                resetAtDict["7d"] = try UsageNumber.count(rawReset) / 1000
-                            }
-                            if let onDemand = usage["onDemand"] as? [String: Any],
-                               let rawCents = onDemand["usedCents"] {
-                                let cents = try UsageNumber.nonnegative(rawCents)
-                                costUSD = max(costUSD, round((cents / 100.0) * 100) / 100.0)
-                            }
-                            if let lbl = usage["grokPlanLabel"] as? String, !lbl.isEmpty {
-                                planLabel = lbl
-                            }
+                if decKey.contains("weekly-usage.cache") {
+                    if let reading = val["reading"] as? [String: Any],
+                       let usage = reading["usage"] as? [String: Any] {
+                        if let rawPercent = usage["percentUsed"] {
+                            let pct = try UsageNumber.nonnegative(rawPercent)
+                            serverPctDict["7d"] = round(pct * 100) / 100.0
                         }
-                    } else if decKey.contains("transcript.replicas.") {
-                        if let entries = val["entries"] as? [[String: Any]] {
-                            for entry in entries {
-                                try input.check()
-                                guard let rawTimestamp = entry["timestampMs"] else { continue }
-                                let tsMs = try UsageNumber.nonnegative(rawTimestamp)
-                                let dt = Date(timeIntervalSince1970: tsMs / 1000.0)
-                                let content = (entry["content"] as? String) ?? (entry["message"] as? String) ?? ""
-                                let est = max(1, content.count / 3)
-                                for (k, cutoffDate) in cutoffs {
-                                    if dt >= cutoffDate {
-                                        usedCounts[k] = try UsageNumber.add(usedCounts[k, default: 0], est)
-                                    }
+                        if let rawReset = usage["nextResetMs"] {
+                            resetAtDict["7d"] = try UsageNumber.count(rawReset) / 1000
+                        }
+                        if let onDemand = usage["onDemand"] as? [String: Any],
+                           let rawCents = onDemand["usedCents"] {
+                            let cents = try UsageNumber.nonnegative(rawCents)
+                            costUSD = max(costUSD, round((cents / 100.0) * 100) / 100.0)
+                        }
+                        if let lbl = usage["grokPlanLabel"] as? String, !lbl.isEmpty {
+                            planLabel = lbl
+                        }
+                    }
+                } else if decKey.contains("transcript.replicas.") {
+                    if let entries = val["entries"] as? [[String: Any]] {
+                        for entry in entries {
+                            try input.check()
+                            guard let rawTimestamp = entry["timestampMs"] else { continue }
+                            let tsMs = try UsageNumber.nonnegative(rawTimestamp)
+                            let dt = Date(timeIntervalSince1970: tsMs / 1000.0)
+                            let content = (entry["content"] as? String) ?? (entry["message"] as? String) ?? ""
+                            let est = max(1, content.count / 3)
+                            for (k, cutoffDate) in cutoffs {
+                                if dt >= cutoffDate {
+                                    usedCounts[k] = try UsageNumber.add(usedCounts[k, default: 0], est)
                                 }
                             }
                         }
@@ -758,17 +744,29 @@ enum LocalUsageCollector {
         let dbPath: URL
         if let cp = customPath, !cp.isEmpty {
             let u = URL(fileURLWithPath: (cp as NSString).expandingTildeInPath)
-            if u.pathExtension == "vscdb" {
+            var uInfo = stat()
+            if Darwin.lstat(u.path, &uInfo) != 0 {
+                if errno == ENOENT || errno == ENOTDIR { return nil }
+                throw BoundedInput.Failure.file
+            }
+            let uMode = uInfo.st_mode & S_IFMT
+            if uMode == S_IFREG {
                 dbPath = u
-            } else {
+            } else if uMode == S_IFDIR {
                 dbPath = u.appendingPathComponent("state.vscdb")
+            } else {
+                throw BoundedInput.Failure.file
             }
         } else {
             dbPath = home
                 .appendingPathComponent("Library/Application Support/Windsurf/User/globalStorage/state.vscdb")
         }
 
-        guard FileManager.default.fileExists(atPath: dbPath.path) else { return nil }
+        var dbInfo = stat()
+        if Darwin.lstat(dbPath.path, &dbInfo) != 0 {
+            if errno == ENOENT || errno == ENOTDIR { return nil }
+            throw BoundedInput.Failure.file
+        }
 
         guard let data = try WindsurfDatabase.readPlan(at: dbPath, input: input) else { return nil }
         guard let info = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -810,7 +808,11 @@ enum LocalUsageCollector {
         } else {
             copilotBase = home.appendingPathComponent(".copilot/session-state")
         }
-        guard FileManager.default.fileExists(atPath: copilotBase.path) else { return nil }
+        var copilotInfo = stat()
+        if Darwin.lstat(copilotBase.path, &copilotInfo) != 0 {
+            if errno == ENOENT || errno == ENOTDIR { return nil }
+            throw BoundedInput.Failure.file
+        }
 
         var usedCounts = ["2h": 0, "5h": 0, "1d": 0, "7d": 0, "30d": 0]
         let cutoff30d = cutoffs["30d"] ?? now.addingTimeInterval(-30 * 86400)
@@ -886,19 +888,25 @@ enum LocalUsageCollector {
         }
         let dotCursor = home.appendingPathComponent(".cursor")
 
-        if !FileManager.default.fileExists(atPath: cursorAppSupport.path) && !FileManager.default.fileExists(atPath: dotCursor.path) {
+        let appSupportInfo = try fileInfoIfPresent(at: cursorAppSupport)
+        let hasAppSupport = appSupportInfo != nil
+        let hasDotCursor = try fileInfoIfPresent(at: dotCursor) != nil
+
+        if !hasAppSupport && !hasDotCursor {
             return nil
         }
 
         var usedCounts = ["2h": 0, "5h": 0, "1d": 0, "7d": 0, "30d": 0]
-        let candidateDirs = [
-            cursorAppSupport.appendingPathComponent("AgentStores/cursor_agent_stores/.control"),
-            cursorAppSupport
-        ]
-        let pinsDir = candidateDirs.first(where: { FileManager.default.fileExists(atPath: $0.path) }) ?? cursorAppSupport
+        if let appSupportInfo {
+            let appMode = appSupportInfo.st_mode & S_IFMT
+            guard appMode == S_IFDIR || appMode == S_IFREG else {
+                throw BoundedInput.Failure.file
+            }
+            let controlDir = cursorAppSupport.appendingPathComponent("AgentStores/cursor_agent_stores/.control")
+            let hasControl = appMode == S_IFDIR ? try fileInfoIfPresent(at: controlDir) != nil : false
+            let pinsDir = hasControl ? controlDir : cursorAppSupport
 
-        if FileManager.default.fileExists(atPath: pinsDir.path) {
-            for fileURL in try input.files(at: pinsDir) {
+            for fileURL in try input.files(at: pinsDir, includeHidden: true) {
                 guard fileURL.pathExtension == "json" else { continue }
                 guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
                       let mdate = attrs.contentModificationDate else { continue }

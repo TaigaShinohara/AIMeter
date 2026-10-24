@@ -237,6 +237,11 @@ class LegacyInputTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             legacy.atomic_write_json(snapshot, {"invalid": float("nan")})
         self.assertEqual(snapshot.read_text(), "previous")
+        link = self.root / "symlink-snapshot.json"
+        link.symlink_to(snapshot)
+        with self.assertRaises(legacy.InputFailure):
+            legacy.atomic_write_json(link, {"valid": 1})
+        self.assertEqual(snapshot.read_text(), "previous")
 
     def test_failed_refresh_preserves_previous_snapshot(self):
         snapshot = self.put_json(".ai_meter_usage.json", {"providers": {"custom": {"status": "Old"}}})

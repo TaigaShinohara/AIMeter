@@ -383,4 +383,85 @@ final class SecurityInputTests: XCTestCase {
         await fulfillment(of: [currentApplied, oldApplied], timeout: 0.2)
         XCTAssertFalse(validator.isRunning)
     }
+
+    func testGeminiSystemGeneratedAndCursorHiddenPinsAndAtomic0600Snapshot() async throws {
+        _ = try write(".gemini/antigravity/brain/a/.system_generated/logs/transcript.jsonl",
+                      "{\"created_at\":\"\(timestamp)\",\"input_tokens\":15,\"output_tokens\":5}")
+        _ = try write("Library/Application Support/Cursor/AgentStores/cursor_agent_stores/.control/a/pin.json", "{}")
+        _ = try write("Library/Application Support/Cursor/AgentStores/cursor_agent_stores/.control/.hidden/.pin.json", "{}")
+        let snapshot = root.appendingPathComponent("usage.json")
+        let result = try await LocalUsageCollector.collectAndSave(targetFileURL: snapshot, home: root)
+        XCTAssertEqual(result.geminiUsedTokens, 20)
+        XCTAssertEqual(result.providers?["cursor"]?.usedByPeriod?.monthly, 2)
+        var stat = Darwin.stat()
+        XCTAssertEqual(Darwin.lstat(snapshot.path, &stat), 0)
+        XCTAssertEqual(stat.st_mode & 0o777, 0o600)
+
+        let symlinkDest = root.appendingPathComponent("symlink-usage.json")
+        try FileManager.default.createSymbolicLink(at: symlinkDest, withDestinationURL: snapshot)
+        XCTAssertThrowsError(try BoundedInput.writeRegularFileAtomically(Data("{}".utf8), to: symlinkDest))
+    }
+
+    func testSymlinkedRootDirectoryAndSymlinkedWALAreRejected() throws {
+        let realDir = root.appendingPathComponent("real-sessions")
+        _ = try write("real-sessions/test.jsonl", codex("100"))
+        let symlinkDir = root.appendingPathComponent("symlink-sessions")
+        try FileManager.default.createSymbolicLink(at: symlinkDir, withDestinationURL: realDir)
+        XCTAssertThrowsError(try BoundedInput().files(at: symlinkDir))
+        XCTAssertFalse(scan("openai", symlinkDir).isValid)
+
+        let dbURL = try database("wal-symlink.vscdb", sql: """
+        CREATE TABLE ItemTable(key TEXT PRIMARY KEY,value BLOB);
+        INSERT INTO ItemTable VALUES('windsurf.settings.cachedPlanInfo','{"usage":{"usedMessages":5}}');
+        """)
+        let walTarget = try write("fake-wal", "unrelated")
+        let walSymlink = URL(fileURLWithPath: dbURL.path + "-wal")
+        try FileManager.default.createSymbolicLink(at: walSymlink, withDestinationURL: walTarget)
+        XCTAssertFalse(scan("windsurf", dbURL).isValid)
+    }
+
+    func testGCPReferencesPreserveProjectNumbersAndRejectPathOrQueryInputs() {
+        for valid in ["my-project-123", "example.com:my-project-123", "123456789012"] {
+            XCTAssertTrue(UsageParser.isValidGCPProjectReference(valid), valid)
+        }
+        for invalid in ["", "0", "-1", "123project", "123\n", "project?x=y", "../other",
+                        "https://other.example", "my-project\n", "my-project/other"] {
+            XCTAssertFalse(UsageParser.isValidGCPProjectReference(invalid), invalid)
+        }
+    }
+
+    func testGCPProjectIDAndTrustedExecutableValidation() throws {
+        XCTAssertTrue(UsageParser.isValidGCPProjectID("my-project-123"))
+        XCTAssertTrue(UsageParser.isValidGCPProjectID("example.com:my-project-123"))
+        for invalid in ["", "Short", "bad_underscore", "../v1/other", "my-project-", "-project",
+                        "123project", "project?alt=json#frag", "my-project\n", String(repeating: "a", count: 64)] {
+            XCTAssertFalse(UsageParser.isValidGCPProjectID(invalid), invalid)
+        }
+
+        let execURL = try write("bin/gcloud", "#!/bin/sh\necho token\n")
+        XCTAssertEqual(Darwin.chmod(execURL.deletingLastPathComponent().path, 0o755), 0)
+        XCTAssertEqual(Darwin.chmod(execURL.path, 0o755), 0)
+        XCTAssertTrue(UsageParser.isTrustedExecutable(atPath: execURL.path))
+
+        let trustedLink = root.appendingPathComponent("bin/gcloud-trusted-link")
+        try FileManager.default.createSymbolicLink(at: trustedLink, withDestinationURL: execURL)
+        XCTAssertTrue(UsageParser.isTrustedExecutable(atPath: trustedLink.path))
+
+        let groupWritable = try write("bin/gcloud-gw", "#!/bin/sh\n")
+        XCTAssertEqual(Darwin.chmod(groupWritable.path, 0o775), 0)
+        XCTAssertFalse(UsageParser.isTrustedExecutable(atPath: groupWritable.path))
+
+        let symlinkToUntrusted = root.appendingPathComponent("bin/gcloud-link")
+        try FileManager.default.createSymbolicLink(at: symlinkToUntrusted, withDestinationURL: groupWritable)
+        XCTAssertFalse(UsageParser.isTrustedExecutable(atPath: symlinkToUntrusted.path))
+        XCTAssertFalse(UsageParser.isTrustedExecutable(atPath: execURL.path, currentUID: 999_999))
+
+        let badDirExec = try write("writable-bin/gcloud", "#!/bin/sh\n")
+        XCTAssertEqual(Darwin.chmod(badDirExec.path, 0o755), 0)
+        XCTAssertEqual(Darwin.chmod(badDirExec.deletingLastPathComponent().path, 0o777), 0)
+        XCTAssertFalse(UsageParser.isTrustedExecutable(atPath: badDirExec.path))
+        let linkedBadDirectory = root.appendingPathComponent("bin/gcloud-bad-parent")
+        try FileManager.default.createSymbolicLink(at: linkedBadDirectory, withDestinationURL: badDirExec)
+        XCTAssertFalse(UsageParser.isTrustedExecutable(atPath: linkedBadDirectory.path))
+    }
 }
