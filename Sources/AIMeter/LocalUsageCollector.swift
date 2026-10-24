@@ -270,8 +270,7 @@ enum LocalUsageCollector {
 
             var prevTuple: (inp: Int, cached: Int, out: Int)?
 
-            try input.lines(at: fileURL) { line in
-                guard line.contains("\"token_count\"") else { return }
+            try input.lines(at: fileURL, containing: "\"token_count\"") { line in
                 guard let lineData = line.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
                       let payload = obj["payload"] as? [String: Any],
