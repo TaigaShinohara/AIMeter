@@ -110,9 +110,16 @@ final class SecurityInputTests: XCTestCase {
 
         let url = try write("snapshot.json", "{\"openaiUsedTokens\":\(Int.min)}")
         XCTAssertNil(SharedStore.loadLocalUsageData(from: url))
-        XCTAssertFalse(SharedStore.createCurrentSnapshot(customURL: url, subscriptions: [], openaiLimit5h: 100).hasData)
-        _ = try write("snapshot.json", "{\"openaiUsedByPeriod\":{\"5h\":50},\"openaiServerUsedPercentByPeriod\":{\"5h\":25}}")
-        let valid = SharedStore.createCurrentSnapshot(customURL: url, subscriptions: [], openaiLimit5h: 100)
+        XCTAssertFalse(SharedStore.loadWidgetSnapshot(from: url).hasData)
+        let item = try XCTUnwrap(WidgetServiceItem.fromMetrics(
+            id: "openai", name: "Codex", shortName: "OAI", iconName: "cpu", unit: "tokens",
+            metrics: [PeriodUsageMetric(period: .fiveHours, usedTokens: 50, limitTokens: 100, serverUsedPercent: 25)]
+        ))
+        let snapshot = AIMeterWidgetSnapshot.make(
+            services: [item], totalCostUSD: 0, updatedAt: Date(), hasData: true
+        )
+        try SharedStore.saveWidgetSnapshot(snapshot, to: url)
+        let valid = SharedStore.loadWidgetSnapshot(from: url)
         XCTAssertTrue(valid.hasData)
         XCTAssertEqual(valid.allServices.first?.remainingPercent, 75)
     }

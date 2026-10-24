@@ -1,11 +1,12 @@
 import Foundation
+import Darwin
 
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
 
 // MARK: - Widget Presentation Data Model
-public struct WidgetServiceItem: Identifiable, Equatable {
+public struct WidgetServiceItem: Identifiable, Equatable, Codable {
     public let id: String
     public let name: String
     public let shortName: String
@@ -19,6 +20,7 @@ public struct WidgetServiceItem: Identifiable, Equatable {
     public let unit: String
     public let bottleneckPeriod: LimitPeriod
     public let resetText: String?
+    public let resetTimestamp: Int?
 
     public init(
         id: String,
@@ -33,7 +35,8 @@ public struct WidgetServiceItem: Identifiable, Equatable {
         limitDisplay: String,
         unit: String,
         bottleneckPeriod: LimitPeriod,
-        resetText: String? = nil
+        resetText: String? = nil,
+        resetTimestamp: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -48,24 +51,51 @@ public struct WidgetServiceItem: Identifiable, Equatable {
         self.unit = unit
         self.bottleneckPeriod = bottleneckPeriod
         self.resetText = resetText
+        self.resetTimestamp = resetTimestamp
+    }
+
+    public func remainingResetText(at date: Date = Date()) -> String? {
+        resetTimestamp != nil ? formatRemainingTime(from: resetTimestamp, now: date) : resetText
+    }
+
+    /// Uses the same enabled-period metrics that the host app displays.
+    public static func fromMetrics(
+        id: String, name: String, shortName: String, iconName: String,
+        unit: String, metrics: [PeriodUsageMetric]
+    ) -> WidgetServiceItem? {
+        guard let metric = metrics.filter(\.isValid).min(by: { $0.remainingRatio < $1.remainingRatio }) else {
+            return nil
+        }
+        return WidgetServiceItem(
+            id: id, name: name, shortName: shortName, iconName: iconName,
+            remainingPercent: metric.remainingPercent, remainingRatio: metric.remainingRatio,
+            usedTokens: metric.usedTokens, limitTokens: metric.effectiveLimitTokens,
+            usedDisplay: formatCompactUsage(metric.usedTokens, unit: unit),
+            limitDisplay: formatCompactUsage(metric.effectiveLimitTokens, unit: unit),
+            unit: unit, bottleneckPeriod: metric.period,
+            resetTimestamp: metric.resetTimestamp
+        )
     }
 }
 
-public struct AIMeterWidgetSnapshot: Equatable {
+public struct AIMeterWidgetSnapshot: Equatable, Codable {
     public let mostCriticalService: WidgetServiceItem?
     public let topServices: [WidgetServiceItem]
     public let allServices: [WidgetServiceItem]
     public let totalCostUSD: Double
-    public let updatedAt: Date
+    public let updatedAt: Date?
     public let hasData: Bool
+    public let updateFailed: Bool
+    public let schemaVersion: Int
 
     public init(
         mostCriticalService: WidgetServiceItem?,
         topServices: [WidgetServiceItem],
         allServices: [WidgetServiceItem],
         totalCostUSD: Double,
-        updatedAt: Date,
-        hasData: Bool
+        updatedAt: Date?,
+        hasData: Bool,
+        updateFailed: Bool = false
     ) {
         self.mostCriticalService = mostCriticalService
         self.topServices = topServices
@@ -73,8 +103,34 @@ public struct AIMeterWidgetSnapshot: Equatable {
         self.totalCostUSD = totalCostUSD
         self.updatedAt = updatedAt
         self.hasData = hasData
+        self.updateFailed = updateFailed
+        self.schemaVersion = 1
     }
 
+    public static func empty(updateFailed: Bool = false) -> AIMeterWidgetSnapshot {
+        AIMeterWidgetSnapshot(
+            mostCriticalService: nil, topServices: [], allServices: [],
+            totalCostUSD: 0, updatedAt: nil, hasData: false, updateFailed: updateFailed
+        )
+    }
+
+    public static func make(
+        services: [WidgetServiceItem], totalCostUSD: Double, updatedAt: Date?,
+        hasData: Bool, updateFailed: Bool = false
+    ) -> AIMeterWidgetSnapshot {
+        guard hasData else { return .empty(updateFailed: updateFailed) }
+        // Keep ties deterministic without changing the host app's period choice.
+        let sorted = services.sorted {
+            $0.remainingRatio == $1.remainingRatio ? $0.id < $1.id : $0.remainingRatio < $1.remainingRatio
+        }
+        return AIMeterWidgetSnapshot(
+            mostCriticalService: sorted.first, topServices: Array(sorted.prefix(3)),
+            allServices: sorted, totalCostUSD: totalCostUSD, updatedAt: updatedAt,
+            hasData: true, updateFailed: updateFailed
+        )
+    }
+
+    /// Sample values are reserved for WidgetKit's placeholder and gallery preview.
     public static func placeholder() -> AIMeterWidgetSnapshot {
         let claude = WidgetServiceItem(
             id: "claude",
@@ -166,174 +222,77 @@ public enum SharedStore {
         #endif
     }
 
-    /// Builds a snapshot from the current local file and subscription configurations.
-    public static func createCurrentSnapshot(customURL: URL? = nil, subscriptions suppliedSubscriptions: [CustomSubscriptionConfig]? = nil, openaiLimit5h: Int? = nil) -> AIMeterWidgetSnapshot {
-        guard let data = loadLocalUsageData(from: customURL) else {
-            return AIMeterWidgetSnapshot(
-                mostCriticalService: nil,
-                topServices: [],
-                allServices: [],
-                totalCostUSD: 0,
-                updatedAt: Date(),
-                hasData: false
-            )
+    /// Presentation cache contains only the host app's final display values.
+    /// The extension does not independently interpret preferences or local logs.
+    public static let widgetSnapshotFileURL = localUsageFileURL.deletingLastPathComponent()
+        .appendingPathComponent(".ai_meter_widget.json")
+
+    public static func loadWidgetSnapshot(from customURL: URL? = nil) -> AIMeterWidgetSnapshot {
+        var limits = BoundedInput.Limits()
+        limits.jsonBytes = 1024 * 1024
+        guard let data = try? BoundedInput(limits: limits).data(at: customURL ?? widgetSnapshotFileURL),
+              let snapshot = try? JSONDecoder().decode(AIMeterWidgetSnapshot.self, from: data),
+              (try? validateWidgetSnapshot(snapshot)) != nil else { return .empty() }
+        return snapshot
+    }
+
+    /// The exclusive 0600 temporary file is never readable with broader default
+    /// permissions. Atomic rename replaces the destination itself, not symlink targets.
+    public static func saveWidgetSnapshot(_ snapshot: AIMeterWidgetSnapshot, to customURL: URL? = nil) throws {
+        try validateWidgetSnapshot(snapshot)
+        let data = try JSONEncoder().encode(snapshot)
+        guard data.count <= 1024 * 1024 else { throw BoundedInput.Failure.limit }
+        let destination = customURL ?? widgetSnapshotFileURL
+        let temporary = destination.deletingLastPathComponent()
+            .appendingPathComponent(".ai_meter_widget.\(UUID().uuidString).tmp")
+        let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw BoundedInput.Failure.file }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: temporary)
         }
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+        guard Darwin.rename(temporary.path, destination.path) == 0 else { throw BoundedInput.Failure.file }
+    }
 
-        var subscriptions = suppliedSubscriptions ?? loadCustomSubscriptionsFromUserDefaults()
-        if subscriptions.isEmpty {
-            // Provide sensible defaults if not set yet
-            subscriptions = [
-                .claudePreset(),
-                .cursorPreset(),
-                .grokbotPreset(),
-                .windsurfPreset(),
-                .copilotPreset()
-            ]
+    private static func validateWidgetSnapshot(_ snapshot: AIMeterWidgetSnapshot) throws {
+        guard snapshot.schemaVersion == 1,
+              snapshot.allServices.count <= 256,
+              Set(snapshot.allServices.map(\.id)).count == snapshot.allServices.count,
+              snapshot.topServices == Array(snapshot.allServices.prefix(3)),
+              snapshot.mostCriticalService == snapshot.allServices.first else {
+            throw BoundedInput.Failure.file
         }
-
-        var items: [WidgetServiceItem] = []
-        var totalCost: Double = 0.0
-
-        if let oCost = data.openaiCostUSD { totalCost += oCost }
-        if let gCost = data.geminiCostUSD { totalCost += gCost }
-
-        // Process OpenAI / Codex
-        let oaiUsed5h = data.openaiUsedByPeriod?.fiveHours ?? 0
-        let configuredLimit = openaiLimit5h ?? UserDefaults.standard.integer(forKey: "openaiTokenLimit5h")
-        let oaiLimit5h = configuredLimit > 0 ? configuredLimit : 40_000_000
-        let oaiMetric = PeriodUsageMetric(
-            period: .fiveHours,
-            usedTokens: oaiUsed5h,
-            limitTokens: oaiLimit5h,
-            serverUsedPercent: data.openaiServerUsedPercentByPeriod?.fiveHours,
-            resetTimestamp: data.openaiResetAtByPeriod?.fiveHours
-        )
-        let oaiItem = WidgetServiceItem(
-            id: "openai",
-            name: "OpenAI Codex",
-            shortName: "OAI",
-            iconName: "cpu",
-            remainingPercent: oaiMetric.remainingPercent,
-            remainingRatio: oaiMetric.remainingRatio,
-            usedTokens: oaiUsed5h,
-            limitTokens: oaiMetric.effectiveLimitTokens,
-            usedDisplay: oaiMetric.isValid ? formatCompactTokenCount(oaiUsed5h) : "数値エラー",
-            limitDisplay: formatCompactTokenCount(oaiMetric.effectiveLimitTokens),
-            unit: "tokens",
-            bottleneckPeriod: .fiveHours,
-            resetText: formatRemainingTime(from: oaiMetric.resetTimestamp)
-        )
-        items.append(oaiItem)
-
-        // Process Custom Providers from JSON
-        if let providers = data.providers {
-            for sub in subscriptions where sub.isEnabled {
-                guard let pData = providers[sub.id] else { continue }
-                if let c = pData.costUSD { totalCost += c }
-
-                // Find the tightest / lowest remaining metric among enabled periods
-                var bottleneckMetric: PeriodUsageMetric?
-                for periodRaw in sub.enabledPeriodRawValues {
-                    guard let p = LimitPeriod(rawValue: periodRaw) else { continue }
-                    let used: Int
-                    let limit: Int
-                    switch p {
-                    case .twoHours:
-                        used = pData.usedByPeriod?.twoHours ?? sub.manualUsed2h
-                        limit = sub.limit2h
-                    case .fiveHours:
-                        used = pData.usedByPeriod?.fiveHours ?? sub.manualUsed5h
-                        limit = sub.limit5h
-                    case .daily:
-                        used = pData.usedByPeriod?.daily ?? sub.manualUsedDaily
-                        limit = sub.limitDaily
-                    case .weekly:
-                        used = pData.usedByPeriod?.weekly ?? sub.manualUsedWeekly
-                        limit = sub.limitWeekly
-                    case .monthly:
-                        used = pData.usedByPeriod?.monthly ?? sub.manualUsedMonthly
-                        limit = sub.limitMonthly
-                    }
-
-                    var srvPct: Double?
-                    var srvReset: Int?
-                    switch p {
-                    case .twoHours:
-                        srvPct = pData.serverUsedPercentByPeriod?.twoHours
-                        srvReset = pData.resetAtByPeriod?.twoHours
-                    case .fiveHours:
-                        srvPct = pData.serverUsedPercentByPeriod?.fiveHours
-                        srvReset = pData.resetAtByPeriod?.fiveHours
-                    case .daily:
-                        srvPct = pData.serverUsedPercentByPeriod?.daily
-                        srvReset = pData.resetAtByPeriod?.daily
-                    case .weekly:
-                        srvPct = pData.serverUsedPercentByPeriod?.weekly
-                        srvReset = pData.resetAtByPeriod?.weekly
-                    case .monthly:
-                        srvPct = pData.serverUsedPercentByPeriod?.monthly
-                        srvReset = pData.resetAtByPeriod?.monthly
-                    }
-
-                    let metric = PeriodUsageMetric(
-                        period: p,
-                        usedTokens: used,
-                        limitTokens: limit,
-                        serverUsedPercent: srvPct,
-                        resetTimestamp: srvReset
-                    )
-
-                    if let curr = bottleneckMetric {
-                        if metric.remainingRatio < curr.remainingRatio {
-                            bottleneckMetric = metric
-                        }
-                    } else {
-                        bottleneckMetric = metric
-                    }
-                }
-
-                if let bMetric = bottleneckMetric {
-                    let u = providerUnit(for: sub.id)
-                    let item = WidgetServiceItem(
-                        id: sub.id,
-                        name: sub.name,
-                        shortName: sub.shortName,
-                        iconName: sub.iconName,
-                        remainingPercent: bMetric.remainingPercent,
-                        remainingRatio: bMetric.remainingRatio,
-                        usedTokens: bMetric.usedTokens,
-                        limitTokens: bMetric.effectiveLimitTokens,
-                        usedDisplay: bMetric.isValid ? formatCompactUsage(bMetric.usedTokens, unit: u) : "数値エラー",
-                        limitDisplay: formatCompactUsage(bMetric.effectiveLimitTokens, unit: u),
-                        unit: u,
-                        bottleneckPeriod: bMetric.period,
-                        resetText: formatRemainingTime(from: bMetric.resetTimestamp)
-                    )
-                    items.append(item)
-                }
+        _ = try UsageNumber.finite(snapshot.totalCostUSD)
+        if snapshot.hasData {
+            guard let date = snapshot.updatedAt,
+                  date.timeIntervalSince1970.isFinite,
+                  (0...253_402_300_799).contains(date.timeIntervalSince1970) else {
+                throw BoundedInput.Failure.file
+            }
+        } else {
+            guard snapshot.updatedAt == nil, snapshot.allServices.isEmpty, snapshot.totalCostUSD == 0 else {
+                throw BoundedInput.Failure.file
             }
         }
-
-        // Sort items by lowest remaining percent first (most critical)
-        items.sort { $0.remainingRatio < $1.remainingRatio }
-
-        let critical = items.first
-        let top3 = Array(items.prefix(3))
-
-        let updateDate: Date
-        if let ts = data.updatedAt, let d = ISO8601DateFormatter().date(from: ts) {
-            updateDate = d
-        } else {
-            updateDate = Date()
+        var previousRatio = -Double.infinity
+        for item in snapshot.allServices {
+            if let reset = item.resetTimestamp {
+                guard (0...253_402_300_799).contains(reset) else { throw BoundedInput.Failure.file }
+            }
+            _ = try UsageNumber.checked(item.usedTokens)
+            _ = try UsageNumber.checked(item.limitTokens)
+            guard item.remainingRatio.isFinite, (0...1).contains(item.remainingRatio),
+                  item.remainingRatio >= previousRatio,
+                  item.remainingPercent == Int((item.remainingRatio * 100).rounded()),
+                  !item.id.isEmpty,
+                  [item.id, item.name, item.shortName, item.iconName, item.usedDisplay,
+                   item.limitDisplay, item.unit, item.resetText ?? ""].allSatisfy({ $0.utf8.count <= 512 }) else {
+                throw BoundedInput.Failure.file
+            }
+            previousRatio = item.remainingRatio
         }
-
-        return AIMeterWidgetSnapshot(
-            mostCriticalService: critical,
-            topServices: top3,
-            allServices: items,
-            totalCostUSD: totalCost,
-            updatedAt: updateDate,
-            hasData: true
-        )
     }
 }

@@ -399,47 +399,25 @@ final class AIMeterTests: XCTestCase {
         XCTAssertEqual(windsurf.enabledPeriodRawValues, ["30d"])
     }
 
-    func testWidgetSnapshotGeneration() {
-        let sampleData = LocalUsageData(
-            openaiUsedTokens: 5_000_000,
-            openaiCostUSD: 2.50,
-            geminiUsedTokens: 100_000,
-            geminiCostUSD: 0.80,
-            openaiUsedByPeriod: ProviderPeriodUsageJSON(fiveHours: 20_000_000),
-            providers: [
-                "claude": CustomProviderUsageJSON(
-                    usedByPeriod: ProviderPeriodUsageJSON(fiveHours: 1_200_000),
-                    costUSD: 1.20,
-                    status: "Pro"
-                ),
-                "cursor": CustomProviderUsageJSON(
-                    usedByPeriod: ProviderPeriodUsageJSON(daily: 45),
-                    costUSD: 0.0,
-                    status: "Agent"
-                )
-            ],
-            source: "local_logs_test",
-            updatedAt: "2026-10-19T09:30:00Z"
+    func testWidgetSnapshotGeneration() throws {
+        let date = Date(timeIntervalSince1970: 1_792_400_000)
+        let codex = try XCTUnwrap(WidgetServiceItem.fromMetrics(
+            id: "openai", name: "Codex", shortName: "OAI", iconName: "cpu", unit: "tokens",
+            metrics: [PeriodUsageMetric(period: .fiveHours, usedTokens: 50, limitTokens: 100),
+                      PeriodUsageMetric(period: .weekly, usedTokens: 90, limitTokens: 100)]
+        ))
+        let gemini = try XCTUnwrap(WidgetServiceItem.fromMetrics(
+            id: "gemini", name: "Gemini", shortName: "Gem", iconName: "sparkle", unit: "tokens",
+            metrics: [PeriodUsageMetric(period: .monthly, usedTokens: 25, limitTokens: 100)]
+        ))
+        let snapshot = AIMeterWidgetSnapshot.make(
+            services: [gemini, codex], totalCostUSD: 3.30, updatedAt: date, hasData: true
         )
-
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-
-        let tempFile = tempDir.appendingPathComponent("usage.json")
-        if let encoded = try? JSONEncoder().encode(sampleData) {
-            try? encoded.write(to: tempFile)
-        }
-
-        let snapshot = SharedStore.createCurrentSnapshot(customURL: tempFile, subscriptions: [], openaiLimit5h: 40_000_000)
         XCTAssertTrue(snapshot.hasData)
-        XCTAssertGreaterThan(snapshot.allServices.count, 0)
-        XCTAssertNotNil(snapshot.mostCriticalService)
-
-        // The critical service should be the one with lowest remaining percentage
-        if let critical = snapshot.mostCriticalService {
-            XCTAssertLessThanOrEqual(critical.remainingPercent, 100)
-            XCTAssertFalse(critical.shortName.isEmpty)
-        }
+        XCTAssertEqual(snapshot.allServices.map(\.id), ["openai", "gemini"])
+        XCTAssertEqual(snapshot.mostCriticalService?.bottleneckPeriod, .weekly)
+        XCTAssertEqual(snapshot.mostCriticalService?.remainingPercent, 10)
+        XCTAssertEqual(snapshot.totalCostUSD, 3.30)
+        XCTAssertEqual(snapshot.updatedAt, date)
     }
 }

@@ -20,17 +20,17 @@ struct AIMeterTimelineProvider: TimelineProvider {
         if context.isPreview {
             completion(AIMeterWidgetEntry(date: Date(), snapshot: .placeholder()))
         } else {
-            let snap = SharedStore.createCurrentSnapshot()
-            completion(AIMeterWidgetEntry(date: Date(), snapshot: snap.hasData ? snap : .placeholder()))
+            let snap = SharedStore.loadWidgetSnapshot()
+            completion(AIMeterWidgetEntry(date: Date(), snapshot: snap))
         }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<AIMeterWidgetEntry>) -> Void) {
         let currentDate = Date()
-        let snap = SharedStore.createCurrentSnapshot()
-        let entry = AIMeterWidgetEntry(date: currentDate, snapshot: snap.hasData ? snap : .placeholder())
+        let snap = SharedStore.loadWidgetSnapshot()
+        let entry = AIMeterWidgetEntry(date: currentDate, snapshot: snap)
 
-        // 15分後に定期リロード（メインアプリ更新時にも WidgetCenter.shared.reloadAllTimelines() で即時更新）
+        // 15分後の再読込を要求。本体からもreloadを要求するが、反映時刻はOSが調整する。
         let nextUpdate = Calendar.current.date(byAdding: .minute, value: 15, to: currentDate) ?? currentDate.addingTimeInterval(900)
         let timeline = Timeline(entries: [entry], policy: .after(nextUpdate))
         completion(timeline)
@@ -104,11 +104,12 @@ struct SmallWidgetView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                if snapshot.totalCostUSD > 0 {
-                    Text(String(format: "$%.1f", snapshot.totalCostUSD))
-                        .font(.caption2.weight(.medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
+                WidgetUpdateStatus(snapshot: snapshot)
+            }
+            if snapshot.totalCostUSD > 0 {
+                Text(String(format: "API換算 $%.1f", snapshot.totalCostUSD))
+                    .font(.caption2.weight(.medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
 
             if let item = snapshot.mostCriticalService {
@@ -139,11 +140,11 @@ struct SmallWidgetView: View {
                 )
 
                 HStack {
-                    Text("\(item.usedDisplay)/\(item.limitDisplay)")
+                    Text("\(item.bottleneckPeriod.shortLabel) · \(item.usedDisplay)/\(item.limitDisplay)")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                     Spacer()
-                    if let reset = item.resetText {
+                    if let reset = item.remainingResetText() {
                         Text(reset)
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
@@ -190,9 +191,7 @@ struct MediumWidgetView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text(Self.timeFormatter.string(from: snapshot.updatedAt))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                WidgetUpdateStatus(snapshot: snapshot)
             }
 
             Divider()
@@ -215,9 +214,12 @@ struct MediumWidgetView: View {
                                     .font(.system(size: 11))
                                     .foregroundStyle(.secondary)
                                     .frame(width: 14)
-                                Text(item.shortName)
-                                    .font(.caption.weight(.semibold))
-                                    .frame(width: 44, alignment: .leading)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(item.shortName).font(.caption.weight(.semibold))
+                                    Text(item.bottleneckPeriod.shortLabel).font(.caption2).foregroundStyle(.secondary)
+                                }
+                                .lineLimit(1)
+                                .frame(width: 44, alignment: .leading)
                             }
 
                             WidgetLiquidProgressBar(
@@ -247,11 +249,6 @@ struct MediumWidgetView: View {
         .containerBackground(.ultraThinMaterial, for: .widget)
     }
 
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return f
-    }()
 }
 
 // MARK: - Large Widget View (全サービス詳細)
@@ -270,9 +267,7 @@ struct LargeWidgetView: View {
                         .font(.caption.weight(.medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Text("\(Self.timeFormatter.string(from: snapshot.updatedAt)) 更新")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                WidgetUpdateStatus(snapshot: snapshot)
             }
 
             Divider()
@@ -295,10 +290,12 @@ struct LargeWidgetView: View {
                                     .font(.system(size: 11.5))
                                     .foregroundStyle(.secondary)
                                     .frame(width: 16)
-                                Text(item.name)
-                                    .font(.caption.weight(.medium))
-                                    .lineLimit(1)
-                                    .frame(width: 100, alignment: .leading)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(item.name).font(.caption.weight(.medium))
+                                    Text(item.bottleneckPeriod.shortLabel).font(.caption2).foregroundStyle(.secondary)
+                                }
+                                .lineLimit(1)
+                                .frame(width: 100, alignment: .leading)
                             }
 
                             WidgetLiquidProgressBar(
@@ -319,7 +316,7 @@ struct LargeWidgetView: View {
                                     .foregroundStyle(.secondary)
                                     .frame(width: 85, alignment: .trailing)
 
-                                if let reset = item.resetText {
+                                if let reset = item.remainingResetText() {
                                     Text(reset)
                                         .font(.caption2)
                                         .foregroundStyle(.tertiary)
@@ -337,11 +334,51 @@ struct LargeWidgetView: View {
         .containerBackground(.ultraThinMaterial, for: .widget)
     }
 
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return f
-    }()
+}
+
+private struct WidgetUpdateStatus: View {
+    let snapshot: AIMeterWidgetSnapshot
+
+    var body: some View {
+        if snapshot.updateFailed {
+            Label("更新失敗", systemImage: "exclamationmark.triangle")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .accessibilityLabel("更新失敗。最後に取得した値を表示しています")
+        } else if let date = snapshot.updatedAt {
+            Text(date, style: .relative)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(Text("最終取得 ") + Text(date, style: .date) + Text(date, style: .time))
+        }
+    }
+}
+
+private struct WidgetEmptyView: View {
+    let snapshot: AIMeterWidgetSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("AIMeter", systemImage: "gauge.with.needle")
+                .font(.caption.weight(.semibold))
+            Spacer()
+            Label(snapshot.hasData ? "表示するサービスがありません" : "データ未取得",
+                  systemImage: "chart.bar.xaxis")
+                .font(.caption.weight(.medium))
+            Text(snapshot.hasData ? "AIMeterの設定でサービスを有効にしてください" : "AIMeterを開いて更新してください")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            if snapshot.updateFailed {
+                Label("更新に失敗しました", systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .containerBackground(.ultraThinMaterial, for: .widget)
+    }
 }
 
 // MARK: - Entry View Router
@@ -350,16 +387,23 @@ struct AIMeterWidgetEntryView: View {
     let entry: AIMeterWidgetEntry
 
     var body: some View {
-        switch family {
-        case .systemSmall:
-            SmallWidgetView(snapshot: entry.snapshot)
-        case .systemMedium:
-            MediumWidgetView(snapshot: entry.snapshot)
-        case .systemLarge, .systemExtraLarge:
-            LargeWidgetView(snapshot: entry.snapshot)
-        default:
-            SmallWidgetView(snapshot: entry.snapshot)
+        Group {
+            if !entry.snapshot.hasData || entry.snapshot.allServices.isEmpty {
+                WidgetEmptyView(snapshot: entry.snapshot)
+            } else {
+                switch family {
+                case .systemSmall:
+                    SmallWidgetView(snapshot: entry.snapshot)
+                case .systemMedium:
+                    MediumWidgetView(snapshot: entry.snapshot)
+                case .systemLarge, .systemExtraLarge:
+                    LargeWidgetView(snapshot: entry.snapshot)
+                default:
+                    SmallWidgetView(snapshot: entry.snapshot)
+                }
+            }
         }
+        .widgetURL(URL(string: "aimeter://"))
     }
 }
 
