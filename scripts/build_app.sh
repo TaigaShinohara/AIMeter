@@ -29,14 +29,12 @@ rm -f "${WIDGET_MACOS_DIR}/AIMeterWidgetExtension"
 cp ".build/release/AIMeterWidgetExtension" "${WIDGET_MACOS_DIR}/AIMeterWidgetExtension"
 chmod +x "${WIDGET_MACOS_DIR}/AIMeterWidgetExtension"
 
-# Resources (Icon & Scripts)
+# Resources (Icon)
 if [ -f "${WORKSPACE_DIR}/Sources/AIMeter/Resources/AppIcon.icns" ]; then
     cp "${WORKSPACE_DIR}/Sources/AIMeter/Resources/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
     cp "${WORKSPACE_DIR}/Sources/AIMeter/Resources/AppIcon.icns" "${WIDGET_RESOURCES_DIR}/AppIcon.icns"
 fi
-
-cp "${WORKSPACE_DIR}/scripts/update_usage.py" "${RESOURCES_DIR}/update_usage.py"
-chmod +x "${RESOURCES_DIR}/update_usage.py"
+rm -f "${RESOURCES_DIR}/update_usage.py"
 
 cat > "${WIDGET_CONTENTS_DIR}/Info.plist" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -130,18 +128,18 @@ else
 fi
 
 echo "[AIMeter] Signing widget extension bundle..."
-codesign --force --sign "${SIGN_IDENTITY}" --entitlements "${WORKSPACE_DIR}/scripts/AIMeterWidgetExtension.entitlements" "${WIDGET_APPEX_DIR}"
+codesign --force --options runtime --sign "${SIGN_IDENTITY}" --entitlements "${WORKSPACE_DIR}/scripts/AIMeterWidgetExtension.entitlements" "${WIDGET_APPEX_DIR}"
 
 echo "[AIMeter] Signing app bundle..."
-codesign --force --sign "${SIGN_IDENTITY}" --entitlements "${WORKSPACE_DIR}/scripts/AIMeter.entitlements" "${APP_DIR}"
+codesign --force --options runtime --sign "${SIGN_IDENTITY}" --entitlements "${WORKSPACE_DIR}/scripts/AIMeter.entitlements" "${APP_DIR}"
 
 # Sync to /Applications if accessible so macOS chronod / WidgetKit will surface the widget
 APPLICATIONS_APP="/Applications/AIMeter.app"
-if [ -d "/Applications" ] && [ -w "/Applications" ]; then
+if [ "${AIMETER_INSTALL_TO_APPLICATIONS:-1}" = "1" ] && [ -d "/Applications" ] && [ -w "/Applications" ]; then
     echo "[AIMeter] Syncing to ${APPLICATIONS_APP}..."
     ditto "${APP_DIR}" "${APPLICATIONS_APP}"
-    codesign --force --sign "${SIGN_IDENTITY}" --entitlements "${WORKSPACE_DIR}/scripts/AIMeterWidgetExtension.entitlements" "${APPLICATIONS_APP}/Contents/PlugIns/AIMeterWidget.appex"
-    codesign --force --sign "${SIGN_IDENTITY}" --entitlements "${WORKSPACE_DIR}/scripts/AIMeter.entitlements" "${APPLICATIONS_APP}"
+    codesign --force --options runtime --sign "${SIGN_IDENTITY}" --entitlements "${WORKSPACE_DIR}/scripts/AIMeterWidgetExtension.entitlements" "${APPLICATIONS_APP}/Contents/PlugIns/AIMeterWidget.appex"
+    codesign --force --options runtime --sign "${SIGN_IDENTITY}" --entitlements "${WORKSPACE_DIR}/scripts/AIMeter.entitlements" "${APPLICATIONS_APP}"
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "${APPLICATIONS_APP}" 2>/dev/null || true
     pluginkit -a "${APPLICATIONS_APP}/Contents/PlugIns/AIMeterWidget.appex" 2>/dev/null || true
     pluginkit -e use -i com.local.AIMeter.widget 2>/dev/null || true

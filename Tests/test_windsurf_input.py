@@ -106,6 +106,15 @@ class WindsurfInputTests(unittest.TestCase):
         finally:
             connection.close()
 
+        wal_link = Path(str(path) + "-wal")
+        target = self.root / "target-wal"
+        target.write_bytes(b"fake")
+        if wal_link.exists():
+            wal_link.unlink()
+        wal_link.symlink_to(target)
+        with self.assertRaises(OSError):
+            collector.read_windsurf_plan(path)
+
 
 if __name__ == "__main__":
     unittest.main()

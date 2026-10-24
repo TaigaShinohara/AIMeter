@@ -29,9 +29,15 @@ enum WindsurfDatabase {
         // Preserve committed WAL data from active editors. SQLite validates WAL
         // frames; an inconsistent concurrent copy fails without replacing usage.
         let wal = URL(fileURLWithPath: url.path + "-wal")
-        if FileManager.default.fileExists(atPath: wal.path) {
+        var walInfo = stat()
+        if Darwin.lstat(wal.path, &walInfo) == 0 {
+            guard (walInfo.st_mode & S_IFMT) == S_IFREG else {
+                throw BoundedInput.Failure.file
+            }
             try input.copyRegularFile(at: wal, to: URL(fileURLWithPath: snapshot.path + "-wal"),
                                       maximum: input.limits.databaseBytes)
+        } else if errno != ENOENT && errno != ENOTDIR {
+            throw BoundedInput.Failure.file
         }
         try snapshotReady?()
         try input.check()

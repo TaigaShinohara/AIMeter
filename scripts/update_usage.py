@@ -188,6 +188,12 @@ def empty_period_dict() -> Dict[str, int]:
 
 def atomic_write_json(target_path: Path, data: Dict[str, Any]) -> None:
     content = json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    try:
+        dest_info = target_path.lstat()
+    except FileNotFoundError:
+        dest_info = None
+    if dest_info is not None and not stat.S_ISREG(dest_info.st_mode):
+        raise InputFailure("Target snapshot path is not a regular file")
     parent_dir = target_path.parent
     fd, tmp_path_str = tempfile.mkstemp(
         prefix=".ai_meter_usage.", suffix=".tmp", dir=str(parent_dir)
@@ -200,7 +206,6 @@ def atomic_write_json(target_path: Path, data: Dict[str, Any]) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(str(tmp_path), str(target_path))
-        os.chmod(str(target_path), 0o600)
     except Exception:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
@@ -756,7 +761,13 @@ def read_windsurf_plan(db_path: Path, *, seconds: float = 2.0,
         snapshot = Path(directory) / "state.vscdb"
         copy_regular(db_path, snapshot)
         wal = Path(str(db_path) + "-wal")
-        if wal.exists():
+        try:
+            wal_info = wal.lstat()
+        except FileNotFoundError:
+            wal_info = None
+        if wal_info is not None:
+            if not stat.S_ISREG(wal_info.st_mode):
+                raise OSError("Windsurf WAL must be a regular file")
             copy_regular(wal, Path(str(snapshot) + "-wal"))
         if snapshot_ready is not None:
             snapshot_ready()

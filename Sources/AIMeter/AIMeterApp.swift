@@ -49,43 +49,6 @@ final class LaunchAtLoginManager: ObservableObject {
     }
 }
 
-// MARK: - Keychain Helper
-enum KeychainHelper {
-    static let service = "com.local.AIMeter"
-
-    static func save(key: String, value: String) {
-        guard let data = value.data(using: .utf8) else { return }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key
-        ]
-        SecItemDelete(query as CFDictionary)
-        guard !value.isEmpty else { return }
-
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(addQuery as CFDictionary, nil)
-    }
-
-    static func load(key: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else {
-            return nil
-        }
-        return String(data: data, encoding: .utf8)
-    }
-}
-
 // MARK: - Usage Monitor
 @MainActor
 final class UsageMonitor: ObservableObject {
@@ -243,17 +206,9 @@ final class UsageMonitor: ObservableObject {
         self.urlSession = URLSession(configuration: config)
         guard startMonitoring else { return }
 
-        if let savedKey = KeychainHelper.load(key: "openaiAdminKey"), !savedKey.isEmpty {
-            self.openaiAdminKey = savedKey
-            if !legacyOpenaiAdminKey.isEmpty {
-                legacyOpenaiAdminKey = ""
-            }
-        } else if !legacyOpenaiAdminKey.isEmpty {
-            let migrated = legacyOpenaiAdminKey
-            self.openaiAdminKey = migrated
-            KeychainHelper.save(key: "openaiAdminKey", value: migrated)
-            legacyOpenaiAdminKey = ""
-        }
+        let restoredKey = KeychainHelper.restore(key: "openaiAdminKey", legacyValue: legacyOpenaiAdminKey)
+        if let value = restoredKey.value { self.openaiAdminKey = value }
+        if restoredKey.canClearLegacy { legacyOpenaiAdminKey = "" }
 
         if !didCalibrateRealLimitsV1 {
             if openaiTokenLimit == 5_000_000 { openaiTokenLimit = 800_000_000 }
@@ -990,9 +945,11 @@ final class UsageMonitor: ObservableObject {
         startStr: String,
         endStr: String
     ) async throws -> Int {
-        guard var components = URLComponents(string: "https://monitoring.googleapis.com/v3/projects/\(projectId)/timeSeries") else {
+        guard UsageParser.isValidGCPProjectReference(projectId),
+              var components = URLComponents(string: "https://monitoring.googleapis.com") else {
             throw URLError(.badURL)
         }
+        components.path = "/v3/projects/\(projectId)/timeSeries"
         components.queryItems = [
             URLQueryItem(name: "filter", value: filter),
             URLQueryItem(name: "interval.startTime", value: startStr),
@@ -1020,20 +977,17 @@ final class UsageMonitor: ObservableObject {
                     "\(home)/google-cloud-sdk/bin/gcloud",
                     "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"
                 ]
-                let resolvedExecutable = candidatePaths.first { FileManager.default.isExecutableFile(atPath: $0) }
-
-                let process = Process()
-                if let execPath = resolvedExecutable {
-                    process.executableURL = URL(fileURLWithPath: execPath)
-                    process.arguments = ["auth", "print-access-token", "--quiet"]
-                } else {
-                    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                    process.arguments = ["gcloud", "auth", "print-access-token", "--quiet"]
+                guard let execPath = candidatePaths.first(where: { UsageParser.isTrustedExecutable(atPath: $0) }) else {
+                    continuation.resume(returning: nil)
+                    return
                 }
 
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: execPath)
+                process.arguments = ["auth", "print-access-token", "--quiet"]
+
                 var env = ProcessInfo.processInfo.environment
-                let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(home)/google-cloud-sdk/bin:/usr/bin:/bin"
-                env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "")
+                env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
                 env["CLOUDSDK_CORE_DISABLE_PROMPTS"] = "1"
                 process.environment = env
 
