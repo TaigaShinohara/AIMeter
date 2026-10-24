@@ -5,13 +5,13 @@ import Darwin
 /// Limits are injectable so tests exercise the boundary with tiny synthetic data.
 public final class BoundedInput {
     public struct Limits {
-        public var fileBytes = 64 * 1024 * 1024
+        public var fileBytes = 128 * 1024 * 1024
         public var jsonBytes = 8 * 1024 * 1024
         public var lineBytes = 1024 * 1024
-        public var totalBytes = 256 * 1024 * 1024
-        public var entries = 20_000
+        public var totalBytes = 1024 * 1024 * 1024
+        public var entries = 100_000
         public var files = 5_000
-        public var seconds: TimeInterval = 15
+        public var seconds: TimeInterval = 60
         public var databaseBytes = 256 * 1024 * 1024
         public var sqliteSteps = 1_000_000
         public init() {}
@@ -207,29 +207,66 @@ public final class BoundedInput {
         try check()
     }
 
-    public func lines(at url: URL, body: (String) throws -> Void) throws {
+    /// With a nonempty marker, unrelated lines are skipped before UTF-8 decoding.
+    /// Oversized unrelated lines retain only the marker's overlap tail. Finding
+    /// the marker anywhere in an oversized line still rejects the entire scan.
+    /// nil and an empty marker both preserve strict decoding of every line.
+    public func lines(at url: URL, containing marker: String? = nil, body: (String) throws -> Void) throws {
         let handle = try openRegular(url, maximum: limits.fileBytes)
         defer { try? handle.close() }
+        guard limits.lineBytes >= 0 else { throw Failure.limit }
+        let needle = marker.flatMap { $0.isEmpty ? nil : Data($0.utf8) }
+        if let needle, needle.count > limits.lineBytes { throw Failure.limit }
         var consumed = 0
         var pending = Data()
-        func deliver(_ bytes: Data) throws {
+        var markerTail = Data()
+        var matched = false
+        var oversized = false
+
+        func consume(_ bytes: Data) throws {
             try check()
-            guard bytes.count <= limits.lineBytes else { throw Failure.limit }
-            guard let line = String(data: bytes, encoding: .utf8) else { throw Failure.encoding }
-            try body(line)
+            if let needle, !matched {
+                var search = markerTail
+                search.append(bytes)
+                matched = search.range(of: needle) != nil
+                markerTail = matched ? Data() : Data(search.suffix(max(0, needle.count - 1)))
+            }
+            if oversized {
+                if matched { throw Failure.limit }
+                return
+            }
+            guard bytes.count <= limits.lineBytes - pending.count else {
+                guard needle != nil, !matched else { throw Failure.limit }
+                oversized = true
+                pending.removeAll(keepingCapacity: false)
+                return
+            }
+            pending.append(bytes)
         }
+
+        func deliver() throws {
+            try check()
+            if !oversized && (needle == nil || matched) {
+                guard let line = String(data: pending, encoding: .utf8) else { throw Failure.encoding }
+                try body(line)
+            }
+            pending.removeAll(keepingCapacity: true)
+            markerTail.removeAll(keepingCapacity: true)
+            matched = false
+            oversized = false
+        }
+
         while true {
             let chunk = try read(handle, consumed: &consumed, maximum: limits.fileBytes)
             if chunk.isEmpty { break }
-            pending.append(chunk)
-            var start = pending.startIndex
-            while let end = pending[start...].firstIndex(of: 10) {
-                try deliver(pending.subdata(in: start..<end))
+            var start = chunk.startIndex
+            while let end = chunk[start...].firstIndex(of: 10) {
+                try consume(chunk[start..<end])
+                try deliver()
                 start = end + 1
             }
-            if start > pending.startIndex { pending = Data(pending[start...]) }
-            guard pending.count <= limits.lineBytes else { throw Failure.limit }
+            if start < chunk.endIndex { try consume(chunk[start...]) }
         }
-        if !pending.isEmpty { try deliver(pending) }
+        if !pending.isEmpty || oversized { try deliver() }
     }
 }
